@@ -6,7 +6,7 @@
     "bin": "src/index.ts",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/capecoma/winterm-mcp.git"
+        "url": "git+https://github.com/zaynram/terminal-mcp.git"
     },
     "keywords": [
         "mcp",
@@ -18,9 +18,9 @@
     "author": "capecoma",
     "license": "MIT",
     "bugs": {
-        "url": "https://github.com/capecoma/winterm-mcp/issues"
+        "url": "https://github.com/zaynram/terminal-mcp/issues"
     },
-    "homepage": "https://github.com/capecoma/winterm-mcp#readme",
+    "homepage": "https://github.com/zaynram/terminal-mcp#readme",
     "dependencies": {
         "@modelcontextprotocol/sdk": "latest",
         "@types/node": "^25.9.1",
