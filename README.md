@@ -34,7 +34,7 @@ Add the server config to `%APPDATA%/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "github.com/capecoma/terminal-mcp": {
+    "terminal-mcp": {
       "command": "bun",
       "args": ["path/to/build/index.js"],
       "disabled": false,
