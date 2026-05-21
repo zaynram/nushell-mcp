@@ -22,11 +22,6 @@ A Model Context Protocol server that provides programmatic access to the termina
    bun install
    ```
 
-3. **Build the Project**:
-   ```bash
-   bun run build
-   ```
-
 4. **Configure Claude Desktop**:
 
 Add the server config to `%APPDATA%/Claude/claude_desktop_config.json`:
@@ -36,7 +31,7 @@ Add the server config to `%APPDATA%/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "terminal-mcp": {
       "command": "bun",
-      "args": ["path/to/build/index.js"],
+      "args": ["--bun", "run", "start", "--cwd=/path/to/repository/clone"],
       "disabled": false,
       "autoApprove": []
     }
