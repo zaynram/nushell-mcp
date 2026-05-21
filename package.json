@@ -1,7 +1,7 @@
 {
-    "name": "winterm-mcp",
+    "name": "terminal-mcp",
     "version": "1.0.0",
-    "description": "Windows Terminal MCP Server - A Model Context Protocol server for Windows terminal interaction",
+    "description": "Terminal MCP Server - A Model Context Protocol server for Windows terminal interaction",
     "type": "module",
     "bin": "src/index.ts",
     "repository": {
