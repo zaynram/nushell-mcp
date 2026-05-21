@@ -3,12 +3,7 @@
     "version": "1.0.0",
     "description": "Windows Terminal MCP Server - A Model Context Protocol server for Windows terminal interaction",
     "type": "module",
-    "main": "build/index.js",
-    "scripts": {
-        "build": "bunx tsc",
-        "start": "bun build/index.js",
-        "dev": "bunx tsc -w"
-    },
+    "bin": "src/index.ts",
     "repository": {
         "type": "git",
         "url": "git+https://github.com/capecoma/winterm-mcp.git"
