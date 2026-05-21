@@ -1,250 +1,372 @@
 #!/usr/bin/env bun
+/**
+ * nushell-mcp — a Model Context Protocol server for Nushell.
+ *
+ * Spiritual successor to terminal-mcp (lineage: winterm-mcp). Where that
+ * server exposed "run a command in a Windows shell", this one is scoped to
+ * Nushell specifically and adds queryable documentation.
+ *
+ * Tools:
+ *   nu_run         — execute a Nushell pipeline, returning NUON-structured data
+ *   nu_kill        — cancel in-flight runs
+ *   nu_doc_search  — search installed commands
+ *   nu_doc_command — full help for one command
+ */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { z } from "zod"
 import {
-    CallToolRequestSchema,
-    ErrorCode,
-    ListToolsRequestSchema,
-    McpError,
-} from "@modelcontextprotocol/sdk/types.js"
+    DEFAULT_TIMEOUT_MS,
+    NU_PATH,
+    type PipelineResult,
+    getCommandDoc,
+    getNuVersion,
+    killAll,
+    runPipeline,
+    runRaw,
+    searchDocs,
+} from "./nu.js"
 
-interface CommandArguments {
-    text: string[]
-    cwd?: string
-    env?: Record<string, string>
-    cleanEnv?: boolean
-    timeoutMs?: number
-    [key: string]: unknown
+/** Build the human-readable text block for a `nu_run` result. */
+function renderRun(result: PipelineResult, timeoutMs: number): string {
+    const parts = [result.stdout.replace(/\s+$/, "") || "(no output)"]
+    if (result.stderr.trim()) parts.push(`\n[stderr]\n${result.stderr.trim()}`)
+    if (result.resultType && result.resultType !== "nothing") {
+        parts.push(`\n[result type: ${result.resultType}]`)
+    }
+    if (result.timedOut) {
+        parts.push(`\n[timed out after ${timeoutMs}ms — process killed]`)
+    } else if (result.exitCode !== 0 && result.exitCode !== null) {
+        parts.push(`\n[exit code ${result.exitCode}]`)
+    }
+    return parts.join("\n")
 }
 
-const isWin: boolean = process.platform === "win32"
-const defaultShell = {
-    win32:
-        Bun.which("pwsh.exe") ??
-        Bun.which("powershell.exe") ??
-        Bun.which("cmd.exe") ??
-        "cmd.exe",
-    linux: Bun.which("bash.exe") ?? "bash.exe",
-}
+const server = new McpServer({ name: "nushell-mcp", version: "0.1.0" })
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.TERMINAL_MCP_TIMEOUT_MS ?? 30_000)
-
-// Resolved once at startup. `exit` terminates the session in every shell the
-// table above can yield (pwsh, powershell, cmd, bash), which is what lets each
-// tool call run one-shot instead of deadlocking on a shell that never dies.
-
-const shellPath: string =
-    process.env.TERMINAL_MCP_SHELL_PATH ??
-    (isWin ? defaultShell.win32 : defaultShell.linux)
-
-class TerminalServer {
-    private mcp: McpServer
-
-    // The low-level protocol server backing the McpServer. We register raw
-    // request handlers on it directly rather than using McpServer's tool API.
-    private get server() {
-        return this.mcp.server
-    }
-
-    // Subprocesses currently in flight. Used so kill_processes / SIGINT can
-    // terminate work this server spawned -- nothing else on the machine.
-    private active = new Set<Bun.Subprocess>()
-
-    constructor() {
-        this.mcp = new McpServer(
-            { name: "winterm-mcp", version: "1.0.0" },
-            { capabilities: { tools: {} } },
-        )
-        this.server.onerror = err => console.error("[MCP Error]", err)
-        this.setupToolHandlers()
-
-        process.on("SIGINT", async () => {
-            await this.cleanup()
-            process.exit(0)
-        })
-    }
-
-    /**
-     * Run one batch of commands in a fresh shell and return its output.
-     *
-     * The shell is interactive (so a real PTY is attached and programs see
-     * isTTY = true), but we append an `exit` line so it terminates as soon as
-     * the command(s) finish -- this is what makes each call "one-shot" and
-     * lets us simply `await proc.exited` instead of deadlocking on a shell
-     * that would otherwise live forever.
-     */
-    private async runCommand(args: CommandArguments) {
-        const lines = Array.isArray(args.text) ? args.text : [args.text]
-        if (lines.length === 0)
-            throw new McpError(
-                ErrorCode.InvalidParams,
-                "`text` must not be empty",
-            )
-
-        const env = args.cleanEnv ? args.env : { ...process.env, ...args.env }
-        const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS
-
-        // Per-call output buffer -- no shared state, so concurrent tool calls
-        // can never interleave each other's output.
-        const decoder = new TextDecoder()
-        let output = ""
-        let resolveEof: () => void
-        const ptyEof = new Promise<void>(resolve => {
-            resolveEof = resolve
-        })
-
-        const terminal = new Bun.Terminal({
-            data: (_term, data) => {
-                output += decoder.decode(data, { stream: true })
-            },
-            // PTY stream closed (EOF) -- all output has now been delivered.
-            exit: () => resolveEof(),
-        })
-
-        const proc = Bun.spawn([shellPath], {
-            terminal,
-            cwd: args.cwd,
-            env,
-        })
-        this.active.add(proc)
-
-        let timedOut = false
-        const timer = setTimeout(() => {
-            timedOut = true
-            proc.kill()
-        }, timeoutMs)
-
+// --- nu_run ----------------------------------------------------------------
+server.registerTool(
+    "nu_run",
+    {
+        title: "Run a Nushell pipeline",
+        description:
+            "Evaluate Nushell code in a fresh, one-shot `nu` process. Returns " +
+            "the rendered output plus the final value as NUON — a concise " +
+            "superset of JSON that preserves Nushell types (filesizes, " +
+            "durations, datetimes) — and its `describe` type. Each call is " +
+            "independent (no persistent session): pass `cwd`/`env` per call. " +
+            "Pass `input` to feed a dataset into the pipeline as `$in`. For " +
+            "large results, slice inside the pipeline (e.g. `... | first 50`).",
+        inputSchema: {
+            pipeline: z
+                .string()
+                .min(1)
+                .describe(
+                    "Nushell code to evaluate. A single pipeline or a multi-line " +
+                        "script, e.g. `ls | where size > 1mb | sort-by modified`.",
+                ),
+            input: z
+                .string()
+                .optional()
+                .describe(
+                    "A value to pipe into the pipeline as `$in`, given as NUON " +
+                        "or JSON text. Use to transform data you already hold.",
+                ),
+            cwd: z
+                .string()
+                .optional()
+                .describe("Working directory to run the pipeline in."),
+            env: z
+                .record(z.string())
+                .optional()
+                .describe("Extra environment variables for this call."),
+            cleanEnv: z
+                .boolean()
+                .optional()
+                .describe(
+                    "Use only `env` instead of extending the server's environment.",
+                ),
+            timeoutMs: z
+                .number()
+                .int()
+                .positive()
+                .optional()
+                .describe(
+                    `Kill the pipeline after this many ms (default ${DEFAULT_TIMEOUT_MS}).`,
+                ),
+            structured: z
+                .boolean()
+                .optional()
+                .describe(
+                    "Capture the final value as NUON (default true). Set false " +
+                        "for raw `nu -c` execution when the wrapper would interfere.",
+                ),
+        },
+        outputSchema: {
+            stdout: z.string(),
+            stderr: z.string(),
+            exitCode: z.number().nullable(),
+            timedOut: z.boolean(),
+            nuon: z
+                .string()
+                .nullable()
+                .describe("Final value as NUON, or null if not captured."),
+            resultType: z
+                .string()
+                .nullable()
+                .describe('`describe` type, e.g. "table<a: int>".'),
+        },
+        annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+        },
+    },
+    async ({ pipeline, input, cwd, env, cleanEnv, timeoutMs, structured }) => {
+        const effectiveTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS
         try {
-            terminal.write(lines.join("\n") + "\nexit\n")
-            await proc.exited
-            // Give the PTY a moment to flush any trailing bytes after exit.
-            await Promise.race([ptyEof, Bun.sleep(200)])
-            output += decoder.decode()
+            const result: PipelineResult =
+                structured === false
+                    ? {
+                          ...(await runRaw(pipeline, {
+                              cwd,
+                              env,
+                              cleanEnv,
+                              timeoutMs,
+                          })),
+                          nuon: null,
+                          resultType: null,
+                      }
+                    : await runPipeline(pipeline, {
+                          input,
+                          cwd,
+                          env,
+                          cleanEnv,
+                          timeoutMs,
+                      })
+            return {
+                content: [
+                    { type: "text", text: renderRun(result, effectiveTimeout) },
+                ],
+                structuredContent: {
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    exitCode: result.exitCode,
+                    timedOut: result.timedOut,
+                    nuon: result.nuon,
+                    resultType: result.resultType,
+                },
+                isError:
+                    result.timedOut ||
+                    (result.exitCode !== 0 && result.exitCode !== null),
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            return {
+                content: [{ type: "text", text: `Failed to run nu: ${message}` }],
+                structuredContent: {
+                    stdout: "",
+                    stderr: message,
+                    exitCode: null,
+                    timedOut: false,
+                    nuon: null,
+                    resultType: null,
+                },
+                isError: true,
+            }
+        }
+    },
+)
 
-            const code = proc.exitCode
-            const trailer = timedOut
-                ? `\n[timed out after ${timeoutMs}ms -- process killed]`
-                : code !== 0 && code !== null
-                  ? `\n[exit code ${code}]`
-                  : ""
+// --- nu_kill ---------------------------------------------------------------
+server.registerTool(
+    "nu_kill",
+    {
+        title: "Cancel running Nushell processes",
+        description:
+            "Terminate every `nu` process this server currently has in flight. " +
+            "Use to recover from a long-running or stuck pipeline.",
+        inputSchema: {},
+        outputSchema: { killed: z.number() },
+        annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: true,
+            openWorldHint: false,
+        },
+    },
+    async () => {
+        const killed = killAll()
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Terminated ${killed} running nu process(es).`,
+                },
+            ],
+            structuredContent: { killed },
+        }
+    },
+)
 
+// --- nu_doc_search ---------------------------------------------------------
+server.registerTool(
+    "nu_doc_search",
+    {
+        title: "Search Nushell documentation",
+        description:
+            "Search every installed Nushell command by name, description, and " +
+            "search terms. Results reflect the installed `nu` version, reported " +
+            "as `nushellVersion`. Follow up with `nu_doc_command` for full help.",
+        inputSchema: {
+            query: z
+                .string()
+                .min(1)
+                .describe('Text to search for, e.g. "parse json", "split".'),
+            category: z
+                .string()
+                .optional()
+                .describe(
+                    'Restrict to one category, e.g. "filters", "strings", "formats".',
+                ),
+            limit: z
+                .number()
+                .int()
+                .positive()
+                .max(200)
+                .optional()
+                .describe("Maximum results to return (default 50)."),
+        },
+        outputSchema: {
+            nushellVersion: z.string(),
+            count: z.number(),
+            matches: z.array(
+                z.object({
+                    name: z.string(),
+                    category: z.string().nullable(),
+                    command_type: z.string().nullable(),
+                    description: z.string().nullable(),
+                }),
+            ),
+        },
+        annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+        },
+    },
+    async ({ query, category, limit }) => {
+        try {
+            const { count, matches, nushellVersion } = await searchDocs(query, {
+                category,
+                limit,
+            })
+            const lines = matches.map(
+                m => `- ${m.name} (${m.category ?? "?"}) — ${m.description ?? ""}`,
+            )
+            const header =
+                count === 0
+                    ? `No commands match "${query}" (Nushell ${nushellVersion}).`
+                    : `${count} command(s) match "${query}" (Nushell ${nushellVersion}):`
+            return {
+                content: [
+                    { type: "text", text: [header, ...lines].join("\n") },
+                ],
+                structuredContent: { nushellVersion, count, matches },
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
             return {
                 content: [
                     {
-                        type: "text" as const,
-                        text:
-                            (output || "(command produced no output)") +
-                            trailer,
+                        type: "text",
+                        text: `Documentation search failed: ${message}`,
                     },
                 ],
-                isError: timedOut || (code !== 0 && code !== null),
+                isError: true,
             }
-        } finally {
-            clearTimeout(timer)
-            this.active.delete(proc)
-            terminal.close()
         }
-    }
+    },
+)
 
-    private setupToolHandlers() {
-        this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-            tools: [
-                {
-                    name: "run_terminal_command",
-                    description:
-                        `Run one or more commands in a fresh ${shellPath} ` +
-                        "shell and return its output. Each call uses a brand-new " +
-                        "shell that exits when the commands finish.",
-                    inputSchema: {
-                        type: "object",
-                        properties: {
-                            text: {
-                                type: "array",
-                                description:
-                                    "Command lines to run, in order, in the shell.",
-                                items: { type: "string" },
-                            },
-                            cwd: {
-                                type: "string",
-                                description:
-                                    "Working directory to spawn the shell in.",
-                            },
-                            env: {
-                                type: "object",
-                                description:
-                                    "Additional environment variables for this command.",
-                                additionalProperties: { type: "string" },
-                            },
-                            cleanEnv: {
-                                type: "boolean",
-                                description:
-                                    "Do not merge the server's environment; use only `env`.",
-                                default: false,
-                            },
-                            timeoutMs: {
-                                type: "number",
-                                description: `Kill the command after this many milliseconds (default ${DEFAULT_TIMEOUT_MS}).`,
-                            },
-                        },
-                        required: ["text"],
-                    },
+// --- nu_doc_command --------------------------------------------------------
+server.registerTool(
+    "nu_doc_command",
+    {
+        title: "Get full Nushell command help",
+        description:
+            "Fetch complete help for one Nushell command: usage, flags, " +
+            "parameters, input/output types, and examples. `help` is the " +
+            "formatted text; `info` carries the same data structured. Reflects " +
+            "the installed `nu` version. On a miss, returns `suggestions`.",
+        inputSchema: {
+            name: z
+                .string()
+                .min(1)
+                .describe(
+                    'Exact command name, e.g. "str join", "http get", "where".',
+                ),
+        },
+        outputSchema: {
+            nushellVersion: z.string(),
+            found: z.boolean(),
+            help: z.string(),
+            info: z.unknown(),
+            suggestions: z.array(z.string()).optional(),
+        },
+        annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+        },
+    },
+    async ({ name }) => {
+        try {
+            const doc = await getCommandDoc(name)
+            const text = doc.found
+                ? doc.help
+                : `Command "${name}" not found in Nushell ${doc.nushellVersion}.` +
+                  (doc.suggestions?.length
+                      ? `\n\nDid you mean:\n${doc.suggestions
+                            .map(s => `- ${s}`)
+                            .join("\n")}`
+                      : "")
+            return {
+                content: [{ type: "text", text }],
+                structuredContent: {
+                    nushellVersion: doc.nushellVersion,
+                    found: doc.found,
+                    help: doc.help,
+                    info: doc.info,
+                    suggestions: doc.suggestions,
                 },
-                {
-                    name: "kill_processes",
-                    description:
-                        "Terminate all commands this server currently has running.",
-                    inputSchema: {
-                        type: "object",
-                        properties: {},
-                    },
-                },
-            ],
-        }))
-
-        this.server.setRequestHandler(CallToolRequestSchema, async request => {
-            switch (request.params.name) {
-                case "run_terminal_command":
-                    return await this.runCommand(
-                        (request.params.arguments ?? {}) as CommandArguments,
-                    )
-
-                case "kill_processes": {
-                    let killed = 0
-                    for (const proc of this.active) {
-                        proc.kill()
-                        killed++
-                    }
-                    return {
-                        content: [
-                            {
-                                type: "text" as const,
-                                text: `terminated ${killed} running command(s)`,
-                            },
-                        ],
-                    }
-                }
-
-                default:
-                    throw new McpError(
-                        ErrorCode.MethodNotFound,
-                        `unknown tool: ${request.params.name}`,
-                    )
+                isError: !doc.found,
             }
-        })
-    }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Documentation lookup failed: ${message}`,
+                    },
+                ],
+                isError: true,
+            }
+        }
+    },
+)
 
-    private async cleanup() {
-        for (const proc of this.active) proc.kill()
-        this.active.clear()
-        await this.server.close()
-    }
+// --- Lifecycle -------------------------------------------------------------
+process.on("SIGINT", () => {
+    killAll()
+    process.exit(0)
+})
 
-    async run() {
-        const transport = new StdioServerTransport()
-        await this.server.connect(transport)
-        console.error(`winterm-mcp running on stdio (shell: ${shellPath})`)
-    }
-}
-
-const server = new TerminalServer()
-server.run().catch(console.error)
+const transport = new StdioServerTransport()
+await server.connect(transport)
+const version = await getNuVersion()
+console.error(`nushell-mcp running on stdio (nu ${version} at ${NU_PATH})`)
