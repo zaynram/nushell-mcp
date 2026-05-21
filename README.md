@@ -1,6 +1,6 @@
-# WinTerm MCP
+# Terminal MCP
 
-A Model Context Protocol server that provides programmatic access to the Windows terminal. This server enables AI models to interact with the Windows command line interface through a set of standardized tools.
+A Model Context Protocol server that provides programmatic access to the terminal. This server enables AI models to interact with the Windows command line interface through a set of standardized tools.
 
 ## Features
 
@@ -13,18 +13,18 @@ A Model Context Protocol server that provides programmatic access to the Windows
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/capecoma/winterm-mcp.git
-   cd winterm-mcp
+   git clone https://github.com/zaynram/terminal-mcp.git
+   cd terminal-mcp
    ```
 
 2. **Install Dependencies**:
    ```bash
-   npm install
+   bun install
    ```
 
 3. **Build the Project**:
    ```bash
-   npm run build
+   bun run build
    ```
 
 4. **Configure Claude Desktop**:
@@ -34,8 +34,8 @@ Add the server config to `%APPDATA%/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "github.com/capecoma/winterm-mcp": {
-      "command": "node",
+    "github.com/capecoma/terminal-mcp": {
+      "command": "bun",
       "args": ["path/to/build/index.js"],
       "disabled": false,
       "autoApprove": []
@@ -44,40 +44,6 @@ Add the server config to `%APPDATA%/Claude/claude_desktop_config.json`:
 }
 ```
 
-Note: Replace "path/to/build/index.js" with the actual path to your built index.js file.
-
-## Available Tools
-
-### write_to_terminal
-Writes text or commands to the terminal.
-```json
-{
-  "command": "echo Hello, World!"
-}
-```
-
-### read_terminal_output
-Reads the specified number of lines from terminal output.
-```json
-{
-  "linesOfOutput": 5
-}
-```
-
-### send_control_character
-Sends a control character to the terminal (e.g., Ctrl+C).
-```json
-{
-  "letter": "C"
-}
-```
-
-## Development
-
-For development with auto-rebuild:
-```bash
-npm run dev
-```
 
 ## License
 
