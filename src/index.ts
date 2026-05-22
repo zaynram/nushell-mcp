@@ -7,10 +7,11 @@
  * Nushell specifically and adds queryable documentation.
  *
  * Tools:
- *   nu_run         — execute a Nushell pipeline, returning NUON-structured data
- *   nu_kill        — cancel in-flight runs
- *   nu_doc_search  — search installed commands
- *   nu_doc_command — full help for one command
+ *   nu_run           — execute a Nushell pipeline, returning NUON-structured data
+ *   nu_kill          — cancel in-flight runs
+ *   nu_doc_search    — search installed commands
+ *   nu_doc_command   — full help for one command
+ *   nu_persist_clear — wipe a persisted-env bucket
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
@@ -18,12 +19,13 @@ import { z } from "zod"
 import {
     DEFAULT_TIMEOUT_MS,
     NU_PATH,
+    PERSIST_DIR,
     type PipelineResult,
+    clearPersistedEnv,
     getCommandDoc,
     getNuVersion,
     killAll,
     runPipeline,
-    runRaw,
     searchDocs,
 } from "./nu.js"
 
@@ -42,7 +44,7 @@ function renderRun(result: PipelineResult, timeoutMs: number): string {
     return parts.join("\n")
 }
 
-const server = new McpServer({ name: "nushell-mcp", version: "0.1.0" })
+const server = new McpServer({ name: "nushell-mcp", version: "0.2.0" })
 
 // --- nu_run ----------------------------------------------------------------
 server.registerTool(
@@ -50,13 +52,20 @@ server.registerTool(
     {
         title: "Run a Nushell pipeline",
         description:
-            "Evaluate Nushell code in a fresh, one-shot `nu` process. Returns " +
-            "the rendered output plus the final value as NUON — a concise " +
+            "Evaluate Nushell code in a fresh, one-shot `nu` process on the " +
+            "host running this server (a local OS process — paths and `sys` " +
+            "calls reflect that host, not the caller's sandbox). Returns the " +
+            "rendered output plus the final value as NUON — a concise " +
             "superset of JSON that preserves Nushell types (filesizes, " +
             "durations, datetimes) — and its `describe` type. Each call is " +
-            "independent (no persistent session): pass `cwd`/`env` per call. " +
-            "Pass `input` to feed a dataset into the pipeline as `$in`. For " +
-            "large results, slice inside the pipeline (e.g. `... | first 50`).",
+            "independent (no implicit session): pass `cwd`/`env` per call. " +
+            "Pass `input` to feed a dataset into the pipeline as `$in` (works " +
+            "in both structured and raw modes). Opt into cross-call carryover " +
+            "with `persistEnv` (file-backed env bucket keyed by `persistKey`) " +
+            "or import a bash-style environment with `bashEnv` (script runs " +
+            "via WSL/Git Bash/bash; exported vars merge into nu's env for " +
+            "this call). For large results, slice inside the pipeline " +
+            "(e.g. `... | first 50`).",
         inputSchema: {
             pipeline: z
                 .string()
@@ -70,16 +79,23 @@ server.registerTool(
                 .optional()
                 .describe(
                     "A value to pipe into the pipeline as `$in`, given as NUON " +
-                        "or JSON text. Use to transform data you already hold.",
+                        "or JSON text. Use to transform data you already hold. " +
+                        "Honored in both structured and raw modes.",
                 ),
             cwd: z
                 .string()
                 .optional()
-                .describe("Working directory to run the pipeline in."),
+                .describe(
+                    "Working directory to run the pipeline in. Interpreted by " +
+                        "the host OS this server is running on.",
+                ),
             env: z
                 .record(z.string())
                 .optional()
-                .describe("Extra environment variables for this call."),
+                .describe(
+                    "Extra environment variables for this call. Layered on top " +
+                        "of any vars captured by `bashEnv`.",
+                ),
             cleanEnv: z
                 .boolean()
                 .optional()
@@ -99,7 +115,46 @@ server.registerTool(
                 .optional()
                 .describe(
                     "Capture the final value as NUON (default true). Set false " +
-                        "for raw `nu -c` execution when the wrapper would interfere.",
+                        "for raw `nu -c` execution when the wrapper would " +
+                        "interfere; `input` is still honored.",
+                ),
+            persistEnv: z
+                .boolean()
+                .optional()
+                .describe(
+                    "When true, load `$env` from a server-side bucket before the " +
+                        "pipeline runs and save it again afterward. Off by default — " +
+                        "calls remain independent unless you opt in. Only " +
+                        "JSON-serializable env values round-trip; closures and " +
+                        "similar are silently dropped.",
+                ),
+            persistKey: z
+                .string()
+                .regex(/^[A-Za-z0-9_-]+$/)
+                .optional()
+                .describe(
+                    'Bucket name for `persistEnv`. Defaults to "default" — all ' +
+                        "calls share one env unless a key is supplied. Restricted " +
+                        "to `[A-Za-z0-9_-]+` so it can be used as a filename safely.",
+                ),
+            persistCwd: z
+                .boolean()
+                .optional()
+                .describe(
+                    "When `persistEnv` is on and `cwd` is not supplied, use the " +
+                        "persisted `$env.PWD` as the call's working directory. " +
+                        "Lets `cd foo` survive across calls. Off by default.",
+                ),
+            bashEnv: z
+                .string()
+                .optional()
+                .describe(
+                    "Bash script evaluated through WSL / Git Bash / `bash` before " +
+                        "the user pipeline runs. Variables it exports (new or " +
+                        "changed vs. baseline) are merged into nu's env for this " +
+                        "call. Probe order: NUSHELL_MCP_BASH_PATH override, then " +
+                        "WSL, then Git Bash, then `bash`. Errors out if none are " +
+                        "available.",
                 ),
         },
         outputSchema: {
@@ -123,28 +178,36 @@ server.registerTool(
             openWorldHint: true,
         },
     },
-    async ({ pipeline, input, cwd, env, cleanEnv, timeoutMs, structured }) => {
+    async ({
+        pipeline,
+        input,
+        cwd,
+        env,
+        cleanEnv,
+        timeoutMs,
+        structured,
+        persistEnv,
+        persistKey,
+        persistCwd,
+        bashEnv,
+    }) => {
         const effectiveTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS
         try {
-            const result: PipelineResult =
-                structured === false
-                    ? {
-                          ...(await runRaw(pipeline, {
-                              cwd,
-                              env,
-                              cleanEnv,
-                              timeoutMs,
-                          })),
-                          nuon: null,
-                          resultType: null,
-                      }
-                    : await runPipeline(pipeline, {
-                          input,
-                          cwd,
-                          env,
-                          cleanEnv,
-                          timeoutMs,
-                      })
+            // Always go through runPipeline so persistEnv, persistKey,
+            // persistCwd, and bashEnv are honored regardless of `structured`.
+            // `structured: false` just toggles the NUON/describe capture off.
+            const result: PipelineResult = await runPipeline(pipeline, {
+                input,
+                cwd,
+                env,
+                cleanEnv,
+                timeoutMs,
+                persistEnv,
+                persistKey,
+                persistCwd,
+                bashEnv,
+                noCapture: structured === false,
+            })
             return {
                 content: [
                     { type: "text", text: renderRun(result, effectiveTimeout) },
@@ -352,6 +415,69 @@ server.registerTool(
                     {
                         type: "text",
                         text: `Documentation lookup failed: ${message}`,
+                    },
+                ],
+                isError: true,
+            }
+        }
+    },
+)
+
+// --- nu_persist_clear ------------------------------------------------------
+server.registerTool(
+    "nu_persist_clear",
+    {
+        title: "Clear a persisted-env bucket",
+        description:
+            "Delete the persisted `$env` file for a `nu_run` persistence " +
+            'bucket. Defaults to the "default" bucket when `key` is omitted. ' +
+            "Idempotent — returns `existed: false` if the bucket had no file. " +
+            `Buckets live under \`${PERSIST_DIR}\`.`,
+        inputSchema: {
+            key: z
+                .string()
+                .regex(/^[A-Za-z0-9_-]+$/)
+                .optional()
+                .describe(
+                    'Bucket name to clear. Defaults to "default". Must match ' +
+                        "`[A-Za-z0-9_-]+`.",
+                ),
+        },
+        outputSchema: {
+            key: z.string(),
+            existed: z.boolean(),
+        },
+        annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: true,
+            openWorldHint: false,
+        },
+    },
+    async ({ key }) => {
+        try {
+            const result = await clearPersistedEnv(key)
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: result.existed
+                            ? `Cleared persisted env bucket "${result.key}".`
+                            : `No persisted env file found for bucket "${result.key}" (nothing to clear).`,
+                    },
+                ],
+                structuredContent: {
+                    key: result.key,
+                    existed: result.existed,
+                },
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Clear persisted env failed: ${message}`,
                     },
                 ],
                 isError: true,

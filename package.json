@@ -1,6 +1,6 @@
 {
     "name": "nushell-mcp",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Model Context Protocol server exposing queryable Nushell documentation and a Nushell execution environment.",
     "type": "module",
     "bin": {
