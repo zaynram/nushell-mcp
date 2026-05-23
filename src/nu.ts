@@ -8,7 +8,7 @@
  * environment bridge. `index.ts` only wires these functions to MCP tools.
  */
 import { randomBytes } from "node:crypto"
-import { mkdir, unlink } from "node:fs/promises"
+import { mkdir, stat, unlink } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -186,6 +186,14 @@ const NU_SAVE_BLOCKED = [
     "LAST_EXIT_CODE",
     "NU_VERSION",
     "OLDPWD",
+    // Server-controlled bookkeeping vars: temp-file paths and request-scoped
+    // input handed to the script via the env. They have no meaning across
+    // calls, and persisting them would bloat the bucket with stale paths.
+    "NU_MCP_NUON_PATH",
+    "NU_MCP_TYPE_PATH",
+    "NU_MCP_PERSIST_LOAD",
+    "NU_MCP_PERSIST_SAVE",
+    "NU_MCP_INPUT",
 ]
 
 /**
@@ -341,17 +349,32 @@ export async function clearPersistedEnv(
 
 /**
  * Read `$env.PWD` from a persisted bucket, or `null` if the bucket has no
- * file yet, no PWD, or doesn't parse. Used by `runPipeline` when `persistCwd`
- * is true and the caller did not pass `cwd`.
+ * file yet, no PWD, doesn't parse, or the recorded PWD no longer exists as a
+ * directory. Used by `runPipeline` when `persistCwd` is true and the caller
+ * did not pass `cwd`. Returning `null` for a stale PWD lets the caller fall
+ * back to its default cwd instead of handing `Bun.spawn` a path that no
+ * longer exists — which surfaces as a confusing "posix_spawn '<nu>'" error
+ * that blames the nu binary rather than the missing directory.
  */
 async function readPersistedPwd(key: string): Promise<string | null> {
     const path = persistPath(key)
     const file = Bun.file(path)
     if (!(await file.exists())) return null
+    let pwd: string
     try {
         const parsed = JSON.parse(await file.text())
-        const pwd = parsed?.PWD
-        return typeof pwd === "string" ? pwd : null
+        const raw = parsed?.PWD
+        if (typeof raw !== "string") return null
+        pwd = raw
+    } catch {
+        return null
+    }
+    // Best-effort directory check. Any failure (missing, not a directory,
+    // permission denied) collapses to `null` so callers see a clean fallback
+    // rather than a thrown error from this helper.
+    try {
+        const info = await stat(pwd)
+        return info.isDirectory() ? pwd : null
     } catch {
         return null
     }

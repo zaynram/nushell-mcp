@@ -240,6 +240,60 @@ describe("persistEnv", () => {
             runPipeline("1", { persistEnv: true, persistKey: "../escape" }),
         ).rejects.toThrow(/persistKey/)
     })
+
+    // Regression: the save filter previously stripped only `ENV_CONVERSIONS`,
+    // `config`, and nu-automatic vars, leaving the server's own bookkeeping
+    // env vars (`NU_MCP_NUON_PATH`, `NU_MCP_TYPE_PATH`, `NU_MCP_PERSIST_LOAD`,
+    // `NU_MCP_PERSIST_SAVE`, and — when input was used — `NU_MCP_INPUT`) in
+    // the bucket file. Those are per-call temp paths and request-scoped input
+    // with no cross-call meaning; persisting them just bloats the bucket.
+    test("saved bucket file excludes server NU_MCP_* bookkeeping vars", async () => {
+        const key = freshKey()
+        const path = `${PERSIST_DIR}/${key}.json`
+        try {
+            const r = await runPipeline(`$env.MY = "x"; $in`, {
+                persistEnv: true,
+                persistKey: key,
+                input: '"sentinel-input"',
+            })
+            expect(r.exitCode).toBe(0)
+            const saved = JSON.parse(await fs.readFile(path, "utf-8"))
+            const leaked = Object.keys(saved).filter(k =>
+                k.startsWith("NU_MCP_"),
+            )
+            expect(leaked).toEqual([])
+        } finally {
+            await clearPersistedEnv(key)
+        }
+    })
+
+    // Regression: when a persisted PWD pointed to a directory that had since
+    // been deleted, runPipeline handed the stale path to Bun.spawn as cwd,
+    // which surfaced as "ENOENT … posix_spawn '<nu>'" — blaming the nu binary
+    // rather than the missing directory. readPersistedPwd now validates the
+    // path is an existing directory and returns null on a miss so the caller
+    // falls back to its default cwd.
+    test("persistCwd falls back when persisted PWD no longer exists", async () => {
+        const key = freshKey()
+        const path = `${PERSIST_DIR}/${key}.json`
+        const nonexistent = `/this/dir/should/never/exist-${randomBytes(8).toString("hex")}`
+        try {
+            await fs.mkdir(PERSIST_DIR, { recursive: true })
+            await fs.writeFile(path, JSON.stringify({ PWD: nonexistent }))
+            const r = await runPipeline("pwd", {
+                persistEnv: true,
+                persistKey: key,
+                persistCwd: true,
+            })
+            expect(r.exitCode).toBe(0)
+            const seen = (r.nuon ?? "").replace(/^"|"$/g, "").replace(/\\/g, "/")
+            expect(seen).not.toBe(nonexistent.replace(/\\/g, "/"))
+            // Falls back to the test process's cwd.
+            expect(seen).toBe(process.cwd().replace(/\\/g, "/"))
+        } finally {
+            await clearPersistedEnv(key)
+        }
+    })
 })
 
 describe("bashEnv bridge", () => {
