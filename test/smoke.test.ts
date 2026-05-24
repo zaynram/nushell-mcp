@@ -908,4 +908,127 @@ describe("MCP server wiring", () => {
         },
         30_000,
     )
+
+    // G2 regression: renderExec must emit "[bashEnv runner: <label>]" in
+    // content[0].text when bashEnv is used. This protects the src/index.ts
+    // branch `if (result.bashRunner) parts.push(...)` against a refactor
+    // that drops the push or misnames the field.
+    test(
+        "nu_exec: [bashEnv runner: ...] label appears in MCP content text",
+        async () => {
+            if (!(await bashRuntimeAvailable())) {
+                console.warn(
+                    "skipping bashEnv runner label MCP test — no bash runtime detected",
+                )
+                return
+            }
+
+            const proc = Bun.spawn(
+                ["bun", `${import.meta.dir}/../src/index.ts`],
+                { stdin: "pipe", stdout: "pipe", stderr: "ignore" },
+            )
+            const reader = proc.stdout.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ""
+
+            const nextMessage = async (): Promise<Record<string, unknown>> => {
+                for (;;) {
+                    const newline = buffer.indexOf("\n")
+                    if (newline >= 0) {
+                        const line = buffer.slice(0, newline).trim()
+                        buffer = buffer.slice(newline + 1)
+                        if (line) return JSON.parse(line)
+                        continue
+                    }
+                    const { value, done } = await reader.read()
+                    if (done) throw new Error("server closed stdout early")
+                    buffer += decoder.decode(value, { stream: true })
+                }
+            }
+            const send = (m: object) =>
+                proc.stdin.write(JSON.stringify(m) + "\n")
+
+            try {
+                send({
+                    jsonrpc: "2.0",
+                    id: 1,
+                    method: "initialize",
+                    params: {
+                        protocolVersion: "2025-06-18",
+                        capabilities: {},
+                        clientInfo: { name: "smoke-g2", version: "0" },
+                    },
+                })
+                send({ jsonrpc: "2.0", method: "notifications/initialized" })
+                send({
+                    jsonrpc: "2.0",
+                    id: 2,
+                    method: "tools/call",
+                    params: {
+                        name: "nu_exec",
+                        arguments: {
+                            pipeline: "$env.G2_VAR? | default 'unset'",
+                            bashEnv: "export G2_VAR=present",
+                        },
+                    },
+                })
+                await proc.stdin.flush()
+
+                // Skip the initialize response, collect the tools/call response.
+                let execResponse: Record<string, unknown> | undefined
+                for (let i = 0; i < 3; i++) {
+                    const msg = await nextMessage()
+                    if (msg.id === 2) {
+                        execResponse = msg
+                        break
+                    }
+                }
+                expect(execResponse).toBeDefined()
+
+                const result = execResponse!.result as {
+                    content?: { type: string; text: string }[]
+                    isError?: boolean
+                }
+                expect(result.isError).toBeFalsy()
+                expect(result.content).toBeDefined()
+                expect(result.content!.length).toBeGreaterThan(0)
+
+                const text = result.content![0]!.text
+                // The runner label must appear in the user-visible text block.
+                expect(text).toContain("[bashEnv runner: ")
+
+                // Negative: when bashEnv is absent the label must not appear.
+                send({
+                    jsonrpc: "2.0",
+                    id: 3,
+                    method: "tools/call",
+                    params: {
+                        name: "nu_exec",
+                        arguments: { pipeline: "1 + 1" },
+                    },
+                })
+                await proc.stdin.flush()
+
+                let plainResponse: Record<string, unknown> | undefined
+                for (let i = 0; i < 3; i++) {
+                    const msg = await nextMessage()
+                    if (msg.id === 3) {
+                        plainResponse = msg
+                        break
+                    }
+                }
+                expect(plainResponse).toBeDefined()
+
+                const plainResult = plainResponse!.result as {
+                    content?: { type: string; text: string }[]
+                }
+                const plainText = plainResult.content![0]!.text
+                expect(plainText).not.toContain("[bashEnv runner: ")
+            } finally {
+                reader.cancel().catch(() => {})
+                proc.kill()
+            }
+        },
+        30_000,
+    )
 })

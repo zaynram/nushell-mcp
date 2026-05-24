@@ -600,6 +600,23 @@ describe("parseEvaluateEnvelope — pure helper", () => {
         expect(env.cwd).toBe("/end spaced path")
         expect(env.historyIndex).toBe(3)
     })
+
+    // G4 regression: trailing whitespace in cwd must be stripped. These protect
+    // the `[^,}]+?\s*(?=[,}])` lookahead in the parser against a refactor that
+    // replaces it with the greedy `[^,}]+` (no trim), which would silently
+    // leave trailing spaces in the returned cwd.
+    test("cwd with trailing spaces before a comma is stripped (mid-envelope)", () => {
+        const text = `{cwd:/foo bar   ,history_index:5,timestamp:0}`
+        const env = parseEvaluateEnvelope(text)
+        expect(env.cwd).toBe("/foo bar")
+        expect(env.historyIndex).toBe(5)
+    })
+
+    test("cwd with trailing spaces before closing brace is stripped (end-of-envelope)", () => {
+        const text = `{history_index:5,timestamp:0,cwd:/foo bar   }`
+        const env = parseEvaluateEnvelope(text)
+        expect(env.cwd).toBe("/foo bar")
+    })
 })
 
 describe("NuMcpPool — BUG 3 regression: concurrent clear(key, 'all') must not throw", () => {
