@@ -468,19 +468,34 @@ server.registerTool(
         },
     },
     async ({ key }) => {
-        const killed = await getReplPool().kill(key)
-        if (!killed) {
+        try {
+            const killed = await getReplPool().kill(key)
+            if (!killed) {
+                return {
+                    content: [
+                        { type: "text", text: `No REPL bucket named "${key}".` },
+                    ],
+                    structuredContent: { key, killed: false },
+                    isError: true,
+                }
+            }
+            return {
+                content: [{ type: "text", text: `Killed REPL bucket "${key}".` }],
+                structuredContent: { key, killed: true },
+            }
+        } catch (err) {
+            // pool.kill is async (awaits mutex for ordering). A rejection
+            // there would otherwise propagate out of the tool callback —
+            // mirror nu_repl_write's catch shape so the client sees a
+            // structured error rather than a torn transport response.
+            const message = err instanceof Error ? err.message : String(err)
             return {
                 content: [
-                    { type: "text", text: `No REPL bucket named "${key}".` },
+                    { type: "text", text: `Kill failed: ${message}` },
                 ],
                 structuredContent: { key, killed: false },
                 isError: true,
             }
-        }
-        return {
-            content: [{ type: "text", text: `Killed REPL bucket "${key}".` }],
-            structuredContent: { key, killed: true },
         }
     },
 )

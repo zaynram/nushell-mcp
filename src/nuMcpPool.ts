@@ -295,22 +295,38 @@ export class NuMcpPool {
 
   /**
    * Kill and unregister a bucket. Returns true if it existed, false otherwise
-   * (idempotent — safe to call on a missing key). Acquires the bucket's
-   * mutex before killing so concurrent clear("all") calls cannot resurrect
-   * the bucket after kill() has deleted it.
+   * (idempotent — safe to call on a missing key).
+   *
+   * The child is killed BEFORE acquiring the mutex — this is the "panic
+   * button" semantic that `nu_repl_kill` depends on. A long-running pipeline
+   * (e.g. `sleep 1hr`, an infinite loop, a wedged HTTP request) inside the
+   * bucket holds the per-bucket mutex via its in-flight `callTool`. Killing
+   * the child first triggers `handleExit` in NuMcpChild, which rejects every
+   * pending request and releases the mutex within microseconds. We then
+   * `await mutex.acquire()` purely for ordering with concurrent `clear()` —
+   * the actual map-delete bookkeeping runs in the critical section.
+   *
+   * Note: `pool.clear(key, "all")` does NOT share this kill-first semantic —
+   * it still waits for in-flight calls before resetting because its "respawn
+   * vs. don't respawn" decision needs to be ordered against concurrent kills.
+   * Callers needing both "stop now" and "fresh state" should `kill` then
+   * `spawn` instead of calling `clear("all")` on a stuck bucket.
    */
   async kill(key: string): Promise<boolean> {
     const entry = this.buckets.get(key)
     if (!entry) return false
+    // Sync: child.kill() fires onExit which prunes the map entry. Any
+    // in-flight callTool rejects shortly after via handleExit, freeing
+    // the mutex so our await below resolves promptly.
+    entry.child.kill()
+    // Drain the mutex for ordering with concurrent clear("all") — that
+    // path's re-check (`this.buckets.get(key) !== entry`) sees the pruned
+    // entry and skips its respawn, preserving BUG 4's "kill wins" semantic.
     const release = await entry.mutex.acquire()
     try {
-      // Refetch after acquiring the mutex. A concurrent clear("all") may
-      // have already replaced this entry under the same key — in that case
-      // we want to destroy whatever is current, not the stale pre-lock entry.
-      const current = this.buckets.get(key)
-      if (!current) return false
-      current.child.kill()
-      this.buckets.delete(key)
+      // onExit already deleted the entry; defensive no-op delete here in
+      // case onExit fired without doing the delete for any reason.
+      if (this.buckets.get(key) === entry) this.buckets.delete(key)
       return true
     } finally {
       release()

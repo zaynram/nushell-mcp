@@ -691,3 +691,41 @@ describe("NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
         }
     })
 })
+
+describe("NuMcpPool — cycle 3: kill terminates an in-flight long call promptly", () => {
+    test("pool.kill resolves quickly (kill-first), in-flight call rejects", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        try {
+            p.spawn("long-call")
+            // Fire a long evaluate without awaiting — it will hold the
+            // bucket mutex for the duration of the sleep.
+            const callPromise = p.call("long-call", "evaluate", {
+                input: "sleep 5sec",
+            })
+            // Capture the call's eventual outcome without leaking an
+            // unhandled rejection in the meantime.
+            const settled = callPromise.then(
+                () => ({ ok: true }),
+                (err) => ({ ok: false, err }),
+            )
+            // Yield one macrotask so the call's mutex.acquire() registers.
+            await new Promise((r) => setImmediate(r))
+            const t0 = Date.now()
+            const killed = await p.kill("long-call")
+            const elapsed = Date.now() - t0
+            // Pre-fix code would wait ~5sec here (mutex held by sleep).
+            // Post-fix (kill-first) resolves within milliseconds because
+            // child.kill() triggers handleExit which rejects the in-flight
+            // callTool, releasing the mutex immediately.
+            expect(killed).toBe(true)
+            expect(elapsed).toBeLessThan(1000)
+            // The in-flight call promise must reject (child died).
+            const outcome = await settled
+            expect(outcome.ok).toBe(false)
+            // Bucket is gone.
+            expect(p.has("long-call")).toBe(false)
+        } finally {
+            p.nukeAll()
+        }
+    })
+})
