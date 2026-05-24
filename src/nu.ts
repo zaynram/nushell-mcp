@@ -617,7 +617,7 @@ export async function runPipeline(
 }
 
 /**
- * Abort only in-flight `nu_run` (exec-role) subprocesses. Leaves REPL
+ * Abort only in-flight `nu_exec` (exec-role) subprocesses. Leaves REPL
  * pool children and the doc singleton alone — those are persistent state
  * the caller would not expect a "cancel my pipeline" button to nuke.
  *
@@ -653,8 +653,13 @@ export function killAll(): number {
     // with nuMcpPool.ts; only function references are touched, no top-level
     // values, so the cycle is safe.
     killed += getReplPool().nukeAll()
-    for (const proc of active.keys()) {
-        proc.kill()
+    for (const [proc] of active) {
+        try {
+            proc.kill()
+        } catch {
+            // Already gone — fine.
+        }
+        active.delete(proc)
         killed++
     }
     return killed

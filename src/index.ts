@@ -36,7 +36,7 @@ import {
 } from "./nu.js"
 import { getReplPool } from "./nuMcpPool.js"
 
-/** Build the human-readable text block for a `nu_run` result. */
+/** Build the human-readable text block for a `nu_exec` result. */
 function renderRun(result: PipelineResult, timeoutMs: number): string {
     const parts = [result.stdout.replace(/\s+$/, "") || "(no output)"]
     if (result.stderr.trim()) parts.push(`\n[stderr]\n${result.stderr.trim()}`)
