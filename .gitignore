@@ -10,10 +10,11 @@ dist/
 .env.local
 .env.*.local
 
-# IDE files
+# IDE / agent runtime
 .vscode/
 .idea/
 *.iml
+.claude/
 
 # Logs
 *.log

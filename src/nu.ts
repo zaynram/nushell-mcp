@@ -4,13 +4,20 @@
  * Every capability the server exposes ultimately runs the `nu` binary in a
  * fresh, one-shot process (see README "Session model" for why one-shot). This
  * module owns process spawning, timeout/cancellation, version detection, the
- * documentation queries, opt-in env persistence across calls, and the bash
- * environment bridge. `index.ts` only wires these functions to MCP tools.
+ * documentation queries, and the bash environment bridge. Cross-call session
+ * state lives in the REPL pool (`nuMcpPool.ts`), not here. `index.ts` only
+ * wires these functions to MCP tools.
  */
 import { randomBytes } from "node:crypto"
-import { mkdir, stat, unlink } from "node:fs/promises"
-import { homedir, tmpdir } from "node:os"
+import { unlink } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
+import {
+    type ListCommandEntry,
+    getNuMcpClient,
+    parseListCommandsOutput,
+} from "./nuMcpClient.js"
+import { getReplPool } from "./nuMcpPool.js"
 
 /** Absolute path to the `nu` executable. Override with `NUSHELL_MCP_NU_PATH`. */
 export const NU_PATH: string =
@@ -22,27 +29,31 @@ export const DEFAULT_TIMEOUT_MS: number = Number(
 )
 
 /**
- * Directory used to store persisted env buckets when `persistEnv` is set on a
- * pipeline call. Override with `NUSHELL_MCP_PERSIST_DIR`; defaults to
- * `~/.nushell-mcp/persist/`.
+ * Role tag for entries in the `active` map. Used by selective kill paths:
+ *   - `"exec"` — one-shot nu pipelines spawned via `spawnNu`.
+ *   - `"bash"` — bash-bridge subprocesses spawned via `dumpEnv` for bashEnv.
+ *
+ * Plan B adds `"repl"` (pool members) and `"doc"` (singleton) once those
+ * spawn sites land. For now only the two ephemeral roles are tracked here;
+ * pool and doc are managed independently by their own modules.
  */
-function defaultPersistDir(): string {
-    // `homedir()` can return an empty string on misconfigured systems (no
-    // HOME/USERPROFILE set). Falling back to tmpdir keeps persistence usable —
-    // the files won't survive a reboot, but the bucket abstraction still
-    // works for the lifetime of the running shell session.
-    const home = homedir()
-    const base = home && home.length > 0 ? home : tmpdir()
-    return join(base, ".nushell-mcp", "persist")
+export type ActiveRole = "exec" | "bash" | "repl" | "doc"
+
+// Every nu/bash subprocess this server has spawned and not yet reaped. The
+// role tag lets `nu_exec_abort` (Plan B Cycle 12) filter for in-flight execs
+// without also killing bash bridges. `killAll` ignores the tag and kills
+// every entry.
+const active = new Map<Bun.Subprocess, ActiveRole>()
+
+/**
+ * Test-only accessor exposing the role tags of currently-tracked
+ * subprocesses. Underscore prefix flags this as not part of the stable
+ * surface — consumers outside tests should use `killAll` / future
+ * `abortExec`.
+ */
+export function _getActiveRoles(): ActiveRole[] {
+    return Array.from(active.values())
 }
-
-export const PERSIST_DIR: string =
-    process.env.NUSHELL_MCP_PERSIST_DIR ?? defaultPersistDir()
-
-// Every nu subprocess this server has spawned and not yet reaped. `killAll`
-// walks this set so a stuck pipeline can be cancelled without touching any
-// other process on the machine.
-const active = new Set<Bun.Subprocess>()
 
 export interface RunOptions {
     /** Directory to spawn `nu` in. Defaults to the server's working directory. */
@@ -99,7 +110,7 @@ async function spawnNu(argv: string[], opts: RunOptions): Promise<RawResult> {
         stdout: "pipe",
         stderr: "pipe",
     })
-    active.add(proc)
+    active.set(proc, "exec")
 
     let timedOut = false
     const timer = setTimeout(() => {
@@ -140,244 +151,64 @@ interface ScriptOptions {
      * runs the pipeline without value capture.
      */
     capture?: { nuonPath: string; typePath: string }
-    /**
-     * When set, the script loads `$env` from `loadPath` before the pipeline
-     * runs (best-effort; missing/invalid file is silently ignored) and saves
-     * `$env` to `savePath` afterward. To make env mutations inside the user's
-     * pipeline visible to the post-pipeline save line, the `do { }` wrap is
-     * switched to `do --env { }`.
-     */
-    persist?: { loadPath: string; savePath: string }
 }
 
 /**
- * Build the nu script string. Composed out of optional fragments so a raw
- * "no-capture" call doesn't pay for NUON serialization, and a non-persisting
- * call doesn't pay for env load/save.
- */
-// Nushell's automatic env vars — set by the runtime itself and read-only as
-// far as `load-env` is concerned. Persisting them is harmless; loading them
-// raises `automatic_env_var_set_manually` and kills the script.
-const NU_AUTO_LOAD_BLOCKED = [
-    "FILE_PWD",
-    "CURRENT_FILE",
-    "PROCESS_PATH",
-    "LAST_EXIT_CODE",
-    "NU_VERSION",
-    "OLDPWD",
-    // PWD is automatic too. We deliberately KEEP it in the saved file so
-    // `persistCwd` can read it via `readPersistedPwd` at the TS layer, but we
-    // strip it on load so the spawn cwd remains authoritative.
-    "PWD",
-]
-
-// Vars omitted from the save side. Two classes:
-//   - Pure bloat: `config` is the user's full nushell config (kilobytes per
-//     call); `ENV_CONVERSIONS` carries closures we don't want to round-trip.
-//   - Nu-automatic vars: same set as NU_AUTO_LOAD_BLOCKED minus PWD, since
-//     PWD is intentionally kept on save so `persistCwd` can read it at the
-//     TS layer (it gets stripped again on load).
-const NU_SAVE_BLOCKED = [
-    "ENV_CONVERSIONS",
-    "config",
-    "FILE_PWD",
-    "CURRENT_FILE",
-    "PROCESS_PATH",
-    "LAST_EXIT_CODE",
-    "NU_VERSION",
-    "OLDPWD",
-    // Server-controlled bookkeeping vars: temp-file paths and request-scoped
-    // input handed to the script via the env. They have no meaning across
-    // calls, and persisting them would bloat the bucket with stale paths.
-    "NU_MCP_NUON_PATH",
-    "NU_MCP_TYPE_PATH",
-    "NU_MCP_PERSIST_LOAD",
-    "NU_MCP_PERSIST_SAVE",
-    "NU_MCP_INPUT",
-]
-
-/**
- * Build the nu script. The shape stays the same regardless of which features
- * are enabled, but each feature contributes a self-contained block:
+ * Build the nu script for one-shot pipeline execution. Two optional features:
  *
- *   1. Snapshot server-controlled paths from env vars into local `let`s so
- *      the user pipeline cannot redirect our reads/writes via $env mutation.
- *   2. (persisting) Load the bucket as a record, then `for`-loop each entry
- *      through `load-env` with a per-key `try` — future nu versions that add
- *      new automatic vars fail for that one key, not the whole script.
- *   3. Run the user pipeline. Input (if any) flows in as a single expression:
- *      `$env.NU_MCP_INPUT | from nuon | do --env { ... }`. `do --env` is what
- *      lets `$env` mutations inside the user pipeline reach the save step
- *      below — `do` alone would isolate them.
- *   4. (capture) Save `describe` output and best-effort NUON. Both go through
- *      paths captured in step 1.
- *   5. (persisting) Save `$env` as JSON. The filter is a declarative
- *      pipeline: drop bloat columns, view as a key/value table, `where` rows
- *      that round-trip through JSON, fold back into a record, write. A failed
- *      write emits one stderr line instead of vanishing silently.
- *   6. Re-emit `$__nu_mcp_value` so nu renders the rendered table to stdout.
+ *   1. Snapshot capture paths into immutable `let`s so the user pipeline
+ *      cannot redirect our reads/writes via $env mutation.
+ *   2. Run the user pipeline inside `do { }`. Input (if any) flows in as
+ *      `$env.NU_MCP_INPUT | from nuon | do { ... }`.
+ *   3. (capture) Save `describe` output and best-effort NUON via the
+ *      snapshotted paths.
+ *   4. Re-emit `$__nu_mcp_value` so nu renders the table to stdout.
  *
- * Paths come from env vars rather than being interpolated as nu string
- * literals because (a) nu has first-class env access (`$env.X`) and we should
- * use it, and (b) it eliminates a tiny but real quote-injection surface if
- * `PERSIST_DIR` ever contained an apostrophe.
+ * Paths come from env vars rather than nu string literals because (a) nu has
+ * first-class env access (`$env.X`) and (b) it eliminates a quote-injection
+ * surface if a temp path ever contained an apostrophe.
  */
 function buildScript(o: ScriptOptions): string {
     const lines: string[] = []
-    const persisting = o.persist !== undefined
 
-    // (1) Snapshot paths into immutable lets at script entry.
-    if (persisting) {
-        lines.push(`let __nu_mcp_load_path = $env.NU_MCP_PERSIST_LOAD`)
-        lines.push(`let __nu_mcp_save_path = $env.NU_MCP_PERSIST_SAVE`)
-    }
     if (o.capture) {
         lines.push(`let __nu_mcp_nuon_path = $env.NU_MCP_NUON_PATH`)
         lines.push(`let __nu_mcp_type_path = $env.NU_MCP_TYPE_PATH`)
     }
 
-    // (2) Per-key try-load. `for` propagates env mutations to the outer
-    //     scope, unlike `each`/`items` which run in isolated closures.
-    if (persisting) {
-        const loadReject = NU_AUTO_LOAD_BLOCKED.join(" ")
-        lines.push(`let __nu_mcp_persisted = try {`)
-        lines.push(`    open --raw $__nu_mcp_load_path | from json | reject --optional ${loadReject}`)
-        lines.push(`} catch { {} }`)
-        lines.push(`for entry in ($__nu_mcp_persisted | transpose key value) {`)
-        lines.push(`    try { load-env { ($entry.key): $entry.value } } catch {}`)
-        lines.push(`}`)
-    }
-
-    // (3) The user pipeline. Input flows in via a single chained expression.
-    const doFlag = persisting ? "do --env" : "do"
     const lead = o.hasInput
-        ? `$env.NU_MCP_INPUT | from nuon | ${doFlag} {`
-        : `${doFlag} {`
+        ? `$env.NU_MCP_INPUT | from nuon | do {`
+        : `do {`
     lines.push(`let __nu_mcp_value = (${lead}`)
     lines.push(o.pipeline)
     lines.push(`})`)
 
-    // (4) Capture. describe always succeeds; nuon can reject closures and a
-    //     few other value shapes, hence the try.
     if (o.capture) {
         lines.push(`$__nu_mcp_value | describe | save --force --raw $__nu_mcp_type_path`)
         lines.push(`try { $__nu_mcp_value | to nuon --serialize | save --force --raw $__nu_mcp_nuon_path }`)
     }
 
-    // (5) Save. The pipeline reads as one record-native sentence: drop bloat,
-    //     project each entry to a single-key record IF its value round-trips
-    //     through JSON (`items` returns `null` for unserializable values like
-    //     closures), drop the nulls, merge the singletons back into a record,
-    //     write. Compared to the older `transpose | where | reduce` form this
-    //     keeps the data in nu's native shape (a record) throughout, and the
-    //     filter/project step is one combined operation instead of two.
-    //
-    //     The outer try keeps a write failure (read-only dir, disk full)
-    //     from masking the user's pipeline result; the catch emits a single
-    //     stderr line so persistence breakage doesn't vanish silently.
-    if (persisting) {
-        const saveReject = NU_SAVE_BLOCKED.join(" ")
-        lines.push(`try {`)
-        lines.push(`    $env`)
-        lines.push(`    | reject --optional ${saveReject}`)
-        lines.push(`    | items { |k, v| try { $v | to json --raw | ignore; {($k): $v} } catch { null } }`)
-        lines.push(`    | where $it != null`)
-        lines.push(`    | into record`)
-        lines.push(`    | to json --raw`)
-        lines.push(`    | save --force --raw $__nu_mcp_save_path`)
-        lines.push(`} catch { |e|`)
-        lines.push(`    print -e $"[nushell-mcp] persistEnv save failed: ($e.msg)"`)
-        lines.push(`}`)
-    }
-
-    // (6) Re-emit the value so nu renders its table to stdout (the
-    //     human-readable view that complements the NUON capture).
     lines.push(`$__nu_mcp_value`)
     return lines.join("\n") + "\n"
 }
 
 // --- Persistence bucket helpers --------------------------------------------
 
-const PERSIST_KEY_RE = /^[A-Za-z0-9_-]+$/
+const BUCKET_KEY_RE = /^[A-Za-z0-9_-]+$/
 
 /**
- * Validate and normalize a persist key. Restricted to `[A-Za-z0-9_-]+` so the
- * key can be used as a filename without escaping or directory traversal risk.
+ * Validate and normalize a REPL bucket key. Restricted to `[A-Za-z0-9_-]+` so
+ * the key is a safe identifier wherever buckets are addressed by name.
+ * Exported for `NuMcpPool` and the `nu_repl_*` tool registrations.
  */
-function sanitizeKey(key: string | undefined): string {
+export function sanitizeKey(key: string | undefined): string {
     const k = key ?? "default"
-    if (!PERSIST_KEY_RE.test(k)) {
+    if (!BUCKET_KEY_RE.test(k)) {
         throw new Error(
-            `persistKey must match ${PERSIST_KEY_RE} (got ${JSON.stringify(k)})`,
+            `bucket key must match ${BUCKET_KEY_RE} (got ${JSON.stringify(k)})`,
         )
     }
     return k
-}
-
-function persistPath(key: string): string {
-    return join(PERSIST_DIR, `${key}.json`)
-}
-
-async function ensurePersistDir(): Promise<void> {
-    await mkdir(PERSIST_DIR, { recursive: true })
-}
-
-export interface ClearPersistedEnvResult {
-    /** The normalized key (defaults to `"default"` when omitted). */
-    key: string
-    /** True if a persisted file existed and was deleted. */
-    existed: boolean
-}
-
-/**
- * Delete the persisted env file for a bucket, if any. Idempotent: returns
- * `existed: false` when there was nothing to delete. Throws only on key-shape
- * violations or unexpected filesystem errors.
- */
-export async function clearPersistedEnv(
-    key?: string,
-): Promise<ClearPersistedEnvResult> {
-    const k = sanitizeKey(key)
-    const path = persistPath(k)
-    const file = Bun.file(path)
-    const existed = await file.exists()
-    if (existed) {
-        await unlink(path)
-    }
-    return { key: k, existed }
-}
-
-/**
- * Read `$env.PWD` from a persisted bucket, or `null` if the bucket has no
- * file yet, no PWD, doesn't parse, or the recorded PWD no longer exists as a
- * directory. Used by `runPipeline` when `persistCwd` is true and the caller
- * did not pass `cwd`. Returning `null` for a stale PWD lets the caller fall
- * back to its default cwd instead of handing `Bun.spawn` a path that no
- * longer exists — which surfaces as a confusing "posix_spawn '<nu>'" error
- * that blames the nu binary rather than the missing directory.
- */
-async function readPersistedPwd(key: string): Promise<string | null> {
-    const path = persistPath(key)
-    const file = Bun.file(path)
-    if (!(await file.exists())) return null
-    let pwd: string
-    try {
-        const parsed = JSON.parse(await file.text())
-        const raw = parsed?.PWD
-        if (typeof raw !== "string") return null
-        pwd = raw
-    } catch {
-        return null
-    }
-    // Best-effort directory check. Any failure (missing, not a directory,
-    // permission denied) collapses to `null` so callers see a clean fallback
-    // rather than a thrown error from this helper.
-    try {
-        const info = await stat(pwd)
-        return info.isDirectory() ? pwd : null
-    } catch {
-        return null
-    }
 }
 
 // --- Bash bridge -----------------------------------------------------------
@@ -549,7 +380,7 @@ async function dumpEnv(
         stdout: "pipe",
         stderr: "pipe",
     })
-    active.add(proc)
+    active.set(proc, "bash")
 
     // Race the drain against an explicit timeout promise. We can't rely on
     // `proc.kill()` + drain to short-circuit, because `bash -c "sleep N"`
@@ -688,26 +519,6 @@ export async function runRaw(
     }
 }
 
-export interface PersistOptions {
-    /**
-     * Capture `$env` after the pipeline and replay it before subsequent calls
-     * with the same `persistKey`. Off by default; opt in only when you want
-     * cross-call carryover.
-     */
-    persistEnv?: boolean
-    /**
-     * Bucket name for `persistEnv`. Defaults to `"default"`. Restricted to
-     * `[A-Za-z0-9_-]+` so it can be used as a filename safely.
-     */
-    persistKey?: string
-    /**
-     * When `persistEnv` is on, also treat the persisted `$env.PWD` as the
-     * call's default cwd (unless the caller passed `cwd` explicitly). Lets
-     * `cd foo` survive across calls. Off by default; opt-in.
-     */
-    persistCwd?: boolean
-}
-
 export interface BashBridgeOptions {
     /**
      * Bash script evaluated before the user pipeline runs. Variables it
@@ -722,15 +533,14 @@ export interface CaptureOptions {
     /**
      * Skip NUON/`describe` capture. The pipeline still runs and its value is
      * still rendered to stdout, but the returned `nuon` and `resultType` are
-     * `null`. `input`, `persistEnv`, `persistCwd`, and `bashEnv` are still
-     * honored — only the post-pipeline value-capture wrap is omitted.
+     * `null`. `input` and `bashEnv` are still honored — only the
+     * post-pipeline value-capture wrap is omitted.
      */
     noCapture?: boolean
 }
 
 export interface PipelineOptions
     extends RunOptions,
-        PersistOptions,
         BashBridgeOptions,
         CaptureOptions {}
 
@@ -748,22 +558,6 @@ export async function runPipeline(
     // the single-quoted nu string literal would risk escape-sequence surprises.
     const fwd = (p: string) => p.replaceAll("\\", "/")
 
-    // --- Persistence setup ------------------------------------------------
-    let persistLoadPath: string | undefined
-    let persistSavePath: string | undefined
-    let effectiveCwd = opts.cwd
-    if (opts.persistEnv) {
-        await ensurePersistDir()
-        const key = sanitizeKey(opts.persistKey)
-        const path = persistPath(key)
-        persistLoadPath = path
-        persistSavePath = path
-        if (opts.persistCwd && !opts.cwd) {
-            const pwd = await readPersistedPwd(key)
-            if (pwd) effectiveCwd = pwd
-        }
-    }
-
     // --- Bash bridge ------------------------------------------------------
     let bridgeEnv: Record<string, string> = {}
     if (opts.bashEnv !== undefined && opts.bashEnv.length > 0) {
@@ -779,34 +573,19 @@ export async function runPipeline(
         : { nuonPath: fwd(nuonPath), typePath: fwd(typePath) }
     await Bun.write(
         scriptPath,
-        buildScript({
-            pipeline,
-            hasInput,
-            capture,
-            persist: opts.persistEnv
-                ? {
-                      loadPath: fwd(persistLoadPath!),
-                      savePath: fwd(persistSavePath!),
-                  }
-                : undefined,
-        }),
+        buildScript({ pipeline, hasInput, capture }),
     )
 
     // Layer env vars from least to most authoritative:
     //   bashEnv-captured  →  caller's explicit env  →  server-controlled.
-    // Server-controlled vars come last so the user pipeline cannot redirect
-    // our reads/writes by exporting a same-named var. They're snapshotted
-    // into local `let` bindings inside the script too (see buildScript step
-    // 1), so even mid-pipeline $env mutation can't break them.
+    // Server-controlled capture-paths come last and are snapshotted into
+    // local `let` bindings inside the script (see buildScript), so
+    // mid-pipeline $env mutation can't redirect them.
     const env: Record<string, string> = {
         ...bridgeEnv,
         ...(opts.env ?? {}),
     }
     if (hasInput) env.NU_MCP_INPUT = opts.input!
-    if (opts.persistEnv) {
-        env.NU_MCP_PERSIST_LOAD = fwd(persistLoadPath!)
-        env.NU_MCP_PERSIST_SAVE = fwd(persistSavePath!)
-    }
     if (capture) {
         env.NU_MCP_NUON_PATH = capture.nuonPath
         env.NU_MCP_TYPE_PATH = capture.typePath
@@ -814,7 +593,7 @@ export async function runPipeline(
 
     try {
         const raw = await spawnNu([scriptPath], {
-            cwd: effectiveCwd,
+            cwd: opts.cwd,
             env,
             cleanEnv: opts.cleanEnv,
             timeoutMs: opts.timeoutMs,
@@ -837,10 +616,44 @@ export async function runPipeline(
     }
 }
 
+/**
+ * Abort only in-flight `nu_run` (exec-role) subprocesses. Leaves REPL
+ * pool children and the doc singleton alone — those are persistent state
+ * the caller would not expect a "cancel my pipeline" button to nuke.
+ *
+ * Plan B Cycle 12.
+ */
+export function abortExec(): number {
+    let aborted = 0
+    for (const [proc, role] of active) {
+        if (role !== "exec") continue
+        try {
+            proc.kill()
+        } catch {
+            // Already gone — fine.
+        }
+        active.delete(proc)
+        aborted++
+    }
+    return aborted
+}
+
 /** Terminate every nu process this server currently has in flight. */
 export function killAll(): number {
     let killed = 0
-    for (const proc of active) {
+    // Kill the doc singleton (Plan A) before iterating active set. The
+    // singleton isn't tracked in `active` so killAll owns both paths and
+    // can't double-kill.
+    const docClient = getNuMcpClient()
+    if (docClient.isAlive()) {
+        docClient.kill()
+        killed++
+    }
+    // Nuke the REPL pool (Plan B). The import resolves via a static cycle
+    // with nuMcpPool.ts; only function references are touched, no top-level
+    // values, so the cycle is safe.
+    killed += getReplPool().nukeAll()
+    for (const proc of active.keys()) {
         proc.kill()
         killed++
     }
@@ -873,106 +686,76 @@ export function getNuVersion(): Promise<string> {
 // input is passed via environment variables, never interpolated into nu
 // source, so the nu code below is a fixed constant with no injection surface.
 
-export interface DocMatch {
-    name: string
-    category: string | null
-    command_type: string | null
-    description: string | null
-}
-
-// The query is tokenized on whitespace; a command scores one point per token
-// that appears in its name, description, or search terms (OR semantics). This
-// keeps recall high for multi-word queries — "parse json" still surfaces both
-// `parse` and `from json` — while `sort-by score` floats fuller matches up.
-const SEARCH_NU = `
-let q = $env.NU_MCP_QUERY
-let cat = $env.NU_MCP_CATEGORY
-let lim = ($env.NU_MCP_LIMIT | into int)
-let terms = ($q | str downcase | split row ' ' | where ($it | is-not-empty))
-let base = (help commands | select name category command_type description search_terms)
-let scored = ($base | each {|row|
-    let hay = ([$row.name ($row.description | default '') ($row.search_terms | default '')] | str join ' ' | str downcase)
-    let score = ($terms | where {|t| $hay | str contains $t } | length)
-    $row | insert score $score
-} | where score > 0 | sort-by score --reverse)
-let filtered = (if ($cat | is-empty) { $scored } else { $scored | where category == $cat })
-$filtered | select name category command_type description | first $lim | to json --raw
-`
-
 export interface SearchDocsOptions {
-    category?: string
     limit?: number
 }
 
-export interface SearchDocsResult {
-    count: number
-    matches: DocMatch[]
-    /** The installed Nushell version these results were drawn from. */
-    nushellVersion: string
-}
+export type SearchDocsResult =
+    | { kind: "commands"; commands: ListCommandEntry[] }
+    | { kind: "help"; help: string }
 
-/** Search every installed command by name, description, and search terms. */
+const SEARCH_HELP_TEXT =
+    "nu_doc_search(query?, limit?)\n" +
+    "\n" +
+    "  query   Substring matched against command names, descriptions,\n" +
+    '          and search terms. Omit (or pass "") to see this help.\n' +
+    '          Pass "*" to list every available command.\n' +
+    "  limit   Maximum results to return (default 50).\n"
+
+/**
+ * Search the installed Nushell command set via the singleton's `list_commands`
+ * tool. Scope is everything `nu --mcp` can see: native commands, loaded
+ * plugins, aliases, and custom defs.
+ *
+ *   - `query` omitted / empty → returns a usage help string; no JSON-RPC call.
+ *   - `query === "*"`         → `list_commands` with no `find` arg (all commands).
+ *   - any other string        → `list_commands({find: query})`.
+ *
+ * Results are sliced to `limit` (default 50). See Plan A §3 / §4.2.
+ */
 export async function searchDocs(
-    query: string,
+    query?: string,
     opts: SearchDocsOptions = {},
 ): Promise<SearchDocsResult> {
-    const limit = opts.limit ?? 50
-    const [raw, nushellVersion] = await Promise.all([
-        runRaw(SEARCH_NU, {
-            timeoutMs: 15_000,
-            env: {
-                NU_MCP_QUERY: query,
-                NU_MCP_CATEGORY: opts.category ?? "",
-                NU_MCP_LIMIT: String(limit),
-            },
-        }),
-        getNuVersion(),
-    ])
-    if (raw.exitCode !== 0) {
-        throw new Error(raw.stderr.trim() || "nu documentation search failed")
+    if (query === undefined || query === null || query === "") {
+        return { kind: "help", help: SEARCH_HELP_TEXT }
     }
-    const matches = JSON.parse(raw.stdout.trim() || "[]") as DocMatch[]
-    return { count: matches.length, matches, nushellVersion }
+    const limit = opts.limit ?? 50
+    const client = getNuMcpClient()
+    const args = query === "*" ? {} : { find: query }
+    const response = await client.callTool("list_commands", args)
+    if (response.isError) {
+        // nu --mcp's `list_commands` returns isError=true with this text
+        // when no commands match — that's a valid empty result for callers,
+        // not a real failure. Anything else IS a failure to surface.
+        if (response.text.includes("No matching commands found")) {
+            return { kind: "commands", commands: [] }
+        }
+        throw new Error(`list_commands failed: ${response.text}`)
+    }
+    const entries = parseListCommandsOutput(response.text)
+    return { kind: "commands", commands: entries.slice(0, limit) }
 }
-
-const COMMAND_NU = `
-let n = $env.NU_MCP_NAME
-let matches = (scope commands | where name == $n)
-let info = (if ($matches | is-empty) { null } else {
-    $matches | first | select name category description signatures examples search_terms extra_description
-})
-let help_text = (try { help $n } catch { $"No help text available for: ($n)" })
-{ found: (not ($matches | is-empty)), help: $help_text, info: $info } | to json --raw
-`
 
 export interface CommandDoc {
     found: boolean
-    /** The formatted `help <name>` text: usage, flags, parameters, examples. */
+    /** The formatted help text from upstream's `command_help` tool. */
     help: string
-    /** Structured command metadata (signatures, examples), or `null` if unknown. */
-    info: unknown
-    /** The installed Nushell version this help was drawn from. */
-    nushellVersion: string
     /** When the command was not found, the closest matching command names. */
     suggestions?: string[]
 }
 
 /**
- * Find command names close to a query that isn't an exact command. Matching
- * is separator-insensitive so a jammed-together guess like "strjoin" still
- * finds "str join", and falls back to a shared-prefix score for typos.
+ * Fuzzy-score `query` against a list of command names; return up to 5 names
+ * sorted by closeness. Matching is separator-insensitive so a jammed-together
+ * guess like "strjoin" still finds "str join", with a shared-prefix tiebreak
+ * for typos.
  */
-async function suggestCommands(query: string): Promise<string[]> {
-    const raw = await runRaw("help commands | get name | to json --raw", {
-        timeoutMs: 15_000,
-    })
-    if (raw.exitCode !== 0) return []
-    const names = JSON.parse(raw.stdout.trim() || "[]") as string[]
+function fuzzyScoreNames(query: string, names: string[]): string[] {
     const flatten = (s: string) => s.toLowerCase().replace(/[\s_-]/g, "")
     const q = flatten(query)
-
     return names
-        .map(name => {
+        .map((name) => {
             const flat = flatten(name)
             let score = 0
             if (flat === q) score = 100
@@ -989,26 +772,41 @@ async function suggestCommands(query: string): Promise<string[]> {
             }
             return { name, score }
         })
-        .filter(entry => entry.score > 0)
+        .filter((entry) => entry.score > 0)
         .sort((a, b) => b.score - a.score)
         .slice(0, 5)
-        .map(entry => entry.name)
+        .map((entry) => entry.name)
 }
 
-/** Fetch full help for one command: formatted text plus structured metadata. */
-export async function getCommandDoc(name: string): Promise<CommandDoc> {
-    const [raw, nushellVersion] = await Promise.all([
-        runRaw(COMMAND_NU, { timeoutMs: 15_000, env: { NU_MCP_NAME: name } }),
-        getNuVersion(),
-    ])
-    if (raw.exitCode !== 0) {
-        throw new Error(raw.stderr.trim() || "nu documentation lookup failed")
+/**
+ * Find command names close to a misspelled query by fetching the full command
+ * list via `list_commands({})` and scoring client-side. Best-effort: returns
+ * an empty array if the singleton call fails for any reason — we don't want
+ * a suggestion lookup to mask the original "command not found" signal.
+ */
+async function suggestCommands(query: string): Promise<string[]> {
+    try {
+        const client = getNuMcpClient()
+        const response = await client.callTool("list_commands", {})
+        if (response.isError) return []
+        const entries = parseListCommandsOutput(response.text)
+        return fuzzyScoreNames(query, entries.map((e) => e.name))
+    } catch {
+        return []
     }
-    const doc = JSON.parse(raw.stdout.trim()) as Omit<
-        CommandDoc,
-        "nushellVersion" | "suggestions"
-    >
-    // On a miss, point the model at near matches instead of a dead end.
-    const suggestions = doc.found ? undefined : await suggestCommands(name)
-    return { ...doc, nushellVersion, suggestions }
+}
+
+/**
+ * Fetch full help for one command via upstream's `command_help` tool. On a
+ * miss, generates near-match suggestions client-side from `list_commands` so
+ * the model can self-correct instead of getting a dead-end error.
+ */
+export async function getCommandDoc(name: string): Promise<CommandDoc> {
+    const client = getNuMcpClient()
+    const response = await client.callTool("command_help", { name })
+    if (response.isError) {
+        const suggestions = await suggestCommands(name)
+        return { found: false, help: response.text, suggestions }
+    }
+    return { found: true, help: response.text }
 }
