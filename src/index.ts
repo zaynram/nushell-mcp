@@ -131,6 +131,7 @@ server.registerTool(
                 ),
             bashEnv: z
                 .string()
+                .min(1)
                 .optional()
                 .describe(
                     "Bash script evaluated through WSL / Git Bash / `bash` before " +
@@ -138,7 +139,8 @@ server.registerTool(
                         "changed vs. baseline) are merged into nu's env for this " +
                         "call. Probe order: NUSHELL_MCP_BASH_PATH override, then " +
                         "WSL, then Git Bash, then `bash`. Errors out if none are " +
-                        "available.",
+                        "available. Empty string is rejected — omit the field " +
+                        "instead.",
                 ),
         },
         outputSchema: {
@@ -457,7 +459,12 @@ server.registerTool(
         title: "Kill a REPL bucket",
         description:
             "Terminate the `nu --mcp` child for a bucket and unregister it. " +
-            "Errors if no bucket with that key is registered.",
+            "Errors if no bucket with that key is registered. This is the " +
+            "panic button for a wedged bucket: kill returns promptly even " +
+            "if a long-running pipeline (e.g. `sleep 1hr`, infinite loop) " +
+            "is in flight. Prefer this over `nu_repl_clear` when a call " +
+            "is stuck — `nu_repl_clear` waits for the in-flight call to " +
+            "complete before resetting.",
         inputSchema: { key: REPL_KEY },
         outputSchema: { key: z.string(), killed: z.boolean() },
         annotations: {
@@ -622,7 +629,10 @@ server.registerTool(
             "Reset a bucket. `mode: 'all'` (default) kills the child and " +
             "respawns it — wipes session state (`let`, `$env`, cwd). " +
             "`mode: 'buffer'` empties the response buffer only; session " +
-            "state survives.",
+            "state survives. Note: `mode: 'all'` waits for any in-flight " +
+            "call on the bucket to complete before resetting. To break out " +
+            "of a wedged long-running pipeline, use `nu_repl_kill` (then " +
+            "`nu_repl_spawn` to start fresh) instead.",
         inputSchema: {
             key: REPL_KEY,
             mode: z.enum(["all", "buffer"]).optional(),

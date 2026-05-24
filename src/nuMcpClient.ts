@@ -386,17 +386,24 @@ export class NuMcpChild {
         } catch (err) {
             // Malformed line from the child — discard and log. Without a
             // corresponding sendRpc reject, the caller has no REPL-side
-            // timeout, so silence here means an indefinite hang. Logging
-            // gives the operator a signal without exposing any content from
-            // the child's stdout (which may contain secrets from $env dumps).
-            const detail = err instanceof Error ? err.message : String(err)
+            // timeout, so silence here means an indefinite hang.
+            //
+            // Default-path log carries ONLY operator-actionable metadata:
+            // line length, role, and the error class name. We deliberately
+            // do NOT emit `err.message` because Bun's `JSON.parse` embeds
+            // offending identifiers from the malformed payload verbatim
+            // (e.g. `Unexpected identifier "sk_live_abc123"`) — which would
+            // re-leak secrets the line-content redaction was meant to block.
+            // Full content (line + parser message) is available behind the
+            // explicit debug env var below.
+            const errorClass = err instanceof Error ? err.constructor.name : "non-Error"
             process.stderr.write(
-                `[nushell-mcp] dispatchLine: discarded malformed line (length=${line.length}, role=${this.role}): ${detail}\n`,
+                `[nushell-mcp] dispatchLine: discarded malformed line (length=${line.length}, role=${this.role}, error=${errorClass})\n`,
             )
-            // Optional content sample for debugging — opt-in via env var so secrets
-            // in normal stdout don't leak into operator logs.
             if (process.env.NUSHELL_MCP_DEBUG_DISPATCH === "1") {
                 const preview = line.slice(0, 200).replace(/[^\x20-\x7E]/g, ".")
+                const detail = err instanceof Error ? err.message : String(err)
+                process.stderr.write(`[nushell-mcp] dispatchLine debug: ${detail}\n`)
                 process.stderr.write(`[nushell-mcp] dispatchLine preview: ${preview}\n`)
             }
             return
