@@ -266,7 +266,9 @@ async function detectBashRunner(): Promise<BashRunner | null> {
         // loud, not hidden behind a working fallback runner.
         throw new Error(
             `NUSHELL_MCP_BASH_PATH=${override} did not pass probe — runner unusable. ` +
-            `Unset the env var to fall back to auto-detection (WSL → Git Bash → bash).`,
+            `Restart the nushell-mcp server after unsetting or correcting the env var ` +
+            `(the probe is memoized for the lifetime of the server process). ` +
+            `Without an override, auto-detection tries WSL → Git Bash → bash on PATH.`,
         )
     }
 

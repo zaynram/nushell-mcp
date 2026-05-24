@@ -367,8 +367,9 @@ export class NuMcpChild {
             // rejects all pending requests with "nu --mcp child exited" rather
             // than leaving them to hang indefinitely. Without this kill(),
             // sendRpc callers have no REPL-side timeout to save them.
+            const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
             process.stderr.write(
-                `[nushell-mcp] runStdoutReader error: ${err}\n`,
+                `[nushell-mcp] runStdoutReader error (role=${this.role}): ${detail}\n`,
             )
             try {
                 proc.kill()
@@ -386,12 +387,18 @@ export class NuMcpChild {
             // Malformed line from the child — discard and log. Without a
             // corresponding sendRpc reject, the caller has no REPL-side
             // timeout, so silence here means an indefinite hang. Logging
-            // gives the operator a signal without rate-limiting complexity
-            // (a runaway malformed stream gets capped by the 200-char preview).
-            const preview = line.length > 200 ? `${line.slice(0, 200)}…` : line
+            // gives the operator a signal without exposing any content from
+            // the child's stdout (which may contain secrets from $env dumps).
+            const detail = err instanceof Error ? err.message : String(err)
             process.stderr.write(
-                `[nushell-mcp] dispatchLine: discarded malformed line (${err}): ${preview}\n`,
+                `[nushell-mcp] dispatchLine: discarded malformed line (length=${line.length}, role=${this.role}): ${detail}\n`,
             )
+            // Optional content sample for debugging — opt-in via env var so secrets
+            // in normal stdout don't leak into operator logs.
+            if (process.env.NUSHELL_MCP_DEBUG_DISPATCH === "1") {
+                const preview = line.slice(0, 200).replace(/[^\x20-\x7E]/g, ".")
+                process.stderr.write(`[nushell-mcp] dispatchLine preview: ${preview}\n`)
+            }
             return
         }
         if (msg.kind === "notification") return // server notifications ignored
