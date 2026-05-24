@@ -92,19 +92,21 @@ Adjust the path if the project lives elsewhere. The server speaks MCP over
 
 ## Design decisions
 
-### Documentation source: the in-shell `help` system
+### Documentation source: the in-process `nu --mcp` singleton
 
 `nu_doc_search` and `nu_doc_help` source their content from Nushell's
-built-in `help commands` / `scope commands` system, **not** the online docs
-corpus at `nushell.sh`. Rationale:
+in-process command metadata via the `nu --mcp` singleton — specifically its
+`list_commands` and `command_help` tools — **not** the online docs corpus at
+`nushell.sh`. Rationale:
 
 - **Version-accurate.** The help text always matches the *installed* `nu`, so
   the model never reads flags or examples that don't exist locally.
-- **Offline and low-latency.** Every query runs in a process-wide `nu --mcp`
-  singleton — no per-call spawn, no network fetch, no corpus to cache.
-- **Already structured.** `help commands` returns a table; `scope commands`
-  carries signatures and examples as structured data — which maps cleanly onto
-  MCP structured output with no scraping.
+- **Offline and low-latency.** Every query routes through a process-wide
+  `nu --mcp` singleton — no per-call spawn, no network fetch, no corpus to
+  cache.
+- **Already structured.** `list_commands` returns parseable plaintext entries;
+  `command_help` carries signatures and examples — which maps cleanly onto MCP
+  structured output with no scraping.
 
 The trade-off is that conceptual prose (the topical *guides* on the website)
 is not covered — only per-command reference. For an agent that consults docs
@@ -120,9 +122,10 @@ matches, so a jammed-together guess like `strjoin` still surfaces `str join`.
 ### Versioning
 
 Nothing in this server hardcodes a Nushell version. The installed version is
-detected once at startup (`version | get version`), logged, and returned as
-`nushellVersion` on every `nu_doc_*` response — so documentation results are
-always self-describing and always reflect the `nu` actually on the machine.
+detected once at startup (`version | get version`) and memoized, but is not
+currently attached to every `nu_doc_*` response. Documentation results always
+reflect the `nu` actually on the machine because they are sourced directly from
+its in-process command metadata.
 
 ### Session model: one-shot by default, REPL buckets when state must survive
 

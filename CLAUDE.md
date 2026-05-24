@@ -55,7 +55,7 @@ The generated nu script reads paths from env vars and snapshots them into immuta
 
 ### Documentation source
 
-`nu_doc_search` / `nu_doc_help` query Nushell's in-shell command metadata via the `nu --mcp` singleton — not the website. The current implementation routes through `list_commands` / `command_help` rather than `help commands` / `scope commands`, so keep this guidance aligned with those tool paths if the plumbing changes again. Results are version-accurate to the installed `nu`, but `nu_doc_*` responses do not currently include a `nushellVersion` field. Search query, command name, category, and limit are passed via env vars (never interpolated into nu source), so the embedded nu scripts in `nu.ts` are constants with no injection surface — keep them that way.
+`nu_doc_search` / `nu_doc_help` query Nushell's in-shell command metadata via the `nu --mcp` singleton — not the website. The current implementation routes through `list_commands` / `command_help` rather than `help commands` / `scope commands`, so keep this guidance aligned with those tool paths if the plumbing changes again. Results are version-accurate to the installed `nu`, but `nu_doc_*` responses do not currently include a `nushellVersion` field.
 
 ### Versioning
 

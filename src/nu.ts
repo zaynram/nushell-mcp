@@ -700,11 +700,10 @@ export function getNuVersion(): Promise<string> {
 
 // --- Documentation queries -------------------------------------------------
 //
-// Both queries source their content from nushell's built-in `help`/`scope`
-// system rather than the online docs corpus, so the results always match the
-// installed `nu`. See README "Documentation source" for the rationale. User
-// input is passed via environment variables, never interpolated into nu
-// source, so the nu code below is a fixed constant with no injection surface.
+// Both queries route through the process-wide `nu --mcp` singleton via
+// `getNuMcpClient().callTool("list_commands", ...)` / `callTool("command_help",
+// ...)`. There are no embedded nu scripts in this section — all query
+// parameters are passed as JSON-RPC arguments, not interpolated into nu source.
 
 export interface SearchDocsOptions {
     limit?: number

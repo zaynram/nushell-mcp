@@ -1,11 +1,12 @@
 /**
- * Singleton `nu --mcp` JSON-RPC client.
+ * `nu --mcp` JSON-RPC client (used both as a process-wide doc singleton and
+ * per REPL bucket by `NuMcpPool`).
  *
- * This module owns the wire-level framing AND the singleton child lifecycle
- * for talking to a `nu --mcp` child over its stdio transport (line-delimited
- * JSON-RPC 2.0). The framer primitives (`encodeRequest` / `decodeMessage`)
- * are pure and unit-tested in isolation; the singleton wires them to a child
- * process with lazy spawn + initialize-handshake gating.
+ * This module owns the wire-level framing AND the child lifecycle for talking
+ * to a `nu --mcp` child over its stdio transport (line-delimited JSON-RPC
+ * 2.0). The framer primitives (`encodeRequest` / `decodeMessage`) are pure
+ * and unit-tested in isolation; each `NuMcpChild` instance wires them to its
+ * own child process with lazy spawn + initialize-handshake gating.
  *
  * Plan A, Cycles 1-2.
  */
@@ -248,7 +249,17 @@ export class NuMcpChild {
     private exited = false
     private readonly role: ActiveRole
 
-    constructor(role: ActiveRole = "doc") {
+    /**
+     * Create a new `NuMcpChild` with the given active-set role.
+     *
+     * `role` flows to `addActive(proc, role)` inside `startup()`. The tag
+     * distinguishes REPL-bucket children (`"repl"`) from the doc singleton
+     * (`"doc"`): `abortExec()` filters on `role === "exec"` only, while
+     * `killAll()` reaches every role. Callers must pass an explicit role —
+     * there is no default, because silently choosing the wrong tag affects
+     * `abortExec`/`killAll` filtering downstream.
+     */
+    constructor(role: ActiveRole) {
         this.role = role
     }
 

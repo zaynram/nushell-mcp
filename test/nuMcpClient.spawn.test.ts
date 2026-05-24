@@ -197,7 +197,7 @@ describe("getNuMcpClient — Cycle 5: killAll integration", () => {
 
 describe("NuMcpChild — onExit listener-error isolation", () => {
     test("one throwing listener does not prevent subsequent listeners from firing", async () => {
-        const child = new NuMcpChild()
+        const child = new NuMcpChild("doc")
         let called2 = false
         let called3 = false
 
@@ -220,7 +220,7 @@ describe("NuMcpChild — onExit listener-error isolation", () => {
     })
 
     test("onExit registered after exit fires via queueMicrotask", async () => {
-        const child = new NuMcpChild()
+        const child = new NuMcpChild("doc")
 
         // Kill first — fireExit marks child.exited = true.
         child.kill()
