@@ -161,7 +161,8 @@ export class NuMcpPool {
    * while still holding the mutex. Callers that need the post-call envelope
    * (e.g. `nu_repl_write`) must use this snapshot rather than calling
    * `pool.envelope(key)` separately — the bucket may have been pruned by the
-   * time a separate `envelope()` call runs (BUG 2 fix).
+   * time a separate `envelope()` call runs (a separate lookup would then
+   * throw "bucket does not exist" even though the call itself succeeded).
    */
   async call(
     key: string,
@@ -301,10 +302,18 @@ export class NuMcpPool {
    * button" semantic that `nu_repl_kill` depends on. A long-running pipeline
    * (e.g. `sleep 1hr`, an infinite loop, a wedged HTTP request) inside the
    * bucket holds the per-bucket mutex via its in-flight `callTool`. Killing
-   * the child first triggers `handleExit` in NuMcpChild, which rejects every
-   * pending request and releases the mutex within microseconds. We then
-   * `await mutex.acquire()` purely for ordering with concurrent `clear()` —
-   * the actual map-delete bookkeeping runs in the critical section.
+   * the child triggers `NuMcpChild.kill()`'s own synchronous drain of its
+   * `pending` request map — every in-flight handler rejects immediately
+   * with "nu --mcp client killed" BEFORE fireExit fires. The in-flight
+   * `callTool` promise rejects in the same tick, the awaiting `pool.call`
+   * unwinds to its `finally`, the mutex releases. We then `await
+   * mutex.acquire()` purely for ordering with concurrent `clear()` — the
+   * actual map-delete bookkeeping runs in the critical section.
+   *
+   * (Note: `handleExit` is the OTHER rejection path, reached via
+   * `proc.exited.then(...)` when the child dies on its own without an
+   * explicit kill. On the explicit-kill path it's a no-op against an
+   * already-empty `pending` map.)
    *
    * Note: `pool.clear(key, "all")` does NOT share this kill-first semantic —
    * it still waits for in-flight calls before resetting because its "respawn
@@ -315,13 +324,14 @@ export class NuMcpPool {
   async kill(key: string): Promise<boolean> {
     const entry = this.buckets.get(key)
     if (!entry) return false
-    // Sync: child.kill() fires onExit which prunes the map entry. Any
-    // in-flight callTool rejects shortly after via handleExit, freeing
-    // the mutex so our await below resolves promptly.
+    // Sync: child.kill() drains pending handlers (each rejects with
+    // "nu --mcp client killed") and fires onExit which prunes the map
+    // entry. The in-flight callTool in pool.call rejects in the same tick,
+    // releasing the mutex so our await below resolves promptly.
     entry.child.kill()
     // Drain the mutex for ordering with concurrent clear("all") — that
     // path's re-check (`this.buckets.get(key) !== entry`) sees the pruned
-    // entry and skips its respawn, preserving BUG 4's "kill wins" semantic.
+    // entry and skips its respawn, so kill wins over concurrent clear.
     const release = await entry.mutex.acquire()
     try {
       // onExit already deleted the entry; defensive no-op delete here in

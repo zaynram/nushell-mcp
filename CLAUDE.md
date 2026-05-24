@@ -17,7 +17,7 @@ bunx tsc --noEmit                 # type-check only (no emit; build/ is .gitigno
 
 ## Architecture
 
-Four source files, split by concern:
+Six source files, split by concern:
 
 - **`src/index.ts`** — MCP wiring only. Registers 12 tools against `@modelcontextprotocol/sdk`, connects a `StdioServerTransport`, and delegates every operation to `nu.ts` / the REPL pool. Do not put subprocess logic here. The tools:
   - `nu_exec`, `nu_exec_abort` — one-shot pipeline execution + cancellation.
@@ -27,6 +27,8 @@ Four source files, split by concern:
 - **`src/nu.ts`** — Nushell subprocess layer for one-shots and the bash bridge: spawn/timeout/cancellation, version detection, doc queries (`searchDocs`, `getCommandDoc`), pipeline execution (`runPipeline`, `runRaw`), `abortExec`, `killAll`. Tests import this module directly.
 - **`src/nuMcpClient.ts`** — `NuMcpChild` wraps a long-lived `nu --mcp` child: line-delimited JSON-RPC over stdio, request id/response pairing, `onExit` listener fan-out, idempotent `kill`.
 - **`src/nuMcpPool.ts`** — `NuMcpPool`, the Map-backed registry of REPL `NuMcpChild` buckets keyed by sanitized name. Owns the per-bucket `Mutex` (serializes calls to one bucket; parallel across buckets), the head-first ring buffer of recent responses, the cached `evaluate` envelope (cwd / history_index / timestamp), and the `clear("all")` kill-and-respawn path. Capped by `NUSHELL_MCP_MAX_REPLS` (default 10). The process-wide singleton is `getReplPool()`.
+- **`src/active.ts`** — Owns the `active` Map of every spawned subprocess and the `ActiveRole` string union (`"doc" | "repl" | "exec" | "bash"`). `addActive` / `removeActive` are the only mutators. Filtering on role drives the "every spawned subprocess must be in `active`" invariant — `killAll` / `abortExec` / `nu_exec_abort` walk the map by role tag. Extracted into its own file to avoid an import cycle between `nu.ts` and `nuMcpClient.ts`.
+- **`src/mutex.ts`** — `Mutex` with FIFO ordering via a single promise-chain handle. `acquire()` returns a release callback that's idempotent (double-release is a no-op). The "extend the chain before awaiting prev" pattern is what guarantees FIFO — see the inline comment. Used by `NuMcpPool` per-bucket; could be used anywhere serialization-without-a-real-lock is needed.
 
 The split exists so the test suite can exercise capabilities without booting MCP, and so the MCP layer stays a thin translation of tool schemas → `nu.ts` / pool calls.
 

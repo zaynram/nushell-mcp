@@ -547,7 +547,8 @@ server.registerTool(
         try {
             // Destructure atomically: the envelope snapshot is taken while the
             // mutex is still held, so the bucket dying after the call cannot
-            // cause a separate pool.envelope(key) lookup to throw (BUG 2 fix).
+            // cause a separate pool.envelope(key) lookup to throw "bucket does
+            // not exist" even though the call itself returned a valid response.
             const { response, envelope } = await pool.call(key, "evaluate", { input })
             return {
                 content: [{ type: "text", text: response.text }],

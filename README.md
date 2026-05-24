@@ -113,11 +113,12 @@ is not covered — only per-command reference. For an agent that consults docs
 to drive `nu_exec`, per-command reference is the higher-value half, and it is
 the half that must stay version-accurate.
 
-`nu_doc_search` tokenizes the query on whitespace and scores each command by
-how many tokens hit its name/description/search-terms (OR semantics, ranked).
-This keeps recall high for natural multi-word queries like `parse json`. When
-`nu_doc_help` misses, it returns `suggestions` — separator-insensitive near
-matches, so a jammed-together guess like `strjoin` still surfaces `str join`.
+`nu_doc_search` delegates matching to the installed `nu --mcp`'s
+`list_commands --find <query>` and slices the result to `limit` (default 50).
+Match semantics are whatever upstream `nu` does there — we do not tokenize
+or re-rank on the TS side. When `nu_doc_help` misses, it returns
+`suggestions` — separator-insensitive near matches, so a jammed-together
+guess like `strjoin` still surfaces `str join`.
 
 ### Versioning
 
