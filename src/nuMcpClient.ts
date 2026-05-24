@@ -241,10 +241,10 @@ type RpcHandler = {
  * on death, and graceful kill.
  */
 export class NuMcpChild {
-    proc: Bun.Subprocess | null = null
-    readyPromise: Promise<void> | null = null
-    nextId = 1
-    pending = new Map<JsonRpcId, RpcHandler>()
+    private proc: Bun.Subprocess | null = null
+    private readyPromise: Promise<void> | null = null
+    private nextId = 1
+    private pending = new Map<JsonRpcId, RpcHandler>()
     private exitListeners: (() => void)[] = []
     private exited = false
     private readonly role: ActiveRole
