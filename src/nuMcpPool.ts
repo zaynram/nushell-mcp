@@ -199,19 +199,23 @@ export class NuMcpPool {
    * child and its session state survive. `mode: "all"` kills the child
    * and respawns it under the same key — wipes session state entirely.
    */
-  clear(key: string, mode: "all" | "buffer"): void {
+  async clear(key: string, mode: "all" | "buffer"): Promise<void> {
     const entry = this.buckets.get(key)
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    if (mode === "buffer") {
-      entry.buffer.length = 0
-      return
+    const release = await entry.mutex.acquire()
+    try {
+      if (mode === "buffer") {
+        entry.buffer.length = 0
+        return
+      }
+      // mode === "all": kill + spawn while holding the bucket mutex so no
+      // concurrent call() can interleave with child replacement.
+      entry.child.kill()
+      // After kill(), the map entry is gone. spawn() re-creates everything.
+      this.spawn(key)
+    } finally {
+      release()
     }
-    // mode === "all": kill + spawn. Kill triggers the onExit handler which
-    // deletes the entry from the map; the synchronous follow-up spawn
-    // re-registers it. Same-tick — no other caller can interleave.
-    entry.child.kill()
-    // After kill(), the map entry is gone. spawn() re-creates everything.
-    this.spawn(key)
   }
 
   /**
