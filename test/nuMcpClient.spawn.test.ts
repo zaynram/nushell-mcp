@@ -7,7 +7,26 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { killAll as nuKillAll } from "../src/nu.js"
-import { NuMcpChild, getNuMcpClient } from "../src/nuMcpClient.js"
+import {
+    NuMcpChild,
+    type NuMcpToolResponse,
+    getNuMcpClient,
+} from "../src/nuMcpClient.js"
+
+/**
+ * Narrow a `NuMcpToolResponse` to its success branch. The discriminated
+ * union forbids reading `.text` without narrowing — `expect()` isn't a
+ * type guard, so each test that wants `.text` after asserting success
+ * funnels through this helper instead of duplicating the `if (isError)
+ * throw` boilerplate.
+ */
+function assertOk(
+    r: NuMcpToolResponse,
+): asserts r is Extract<NuMcpToolResponse, { isError: false }> {
+    if (r.isError) {
+        throw new Error(`expected success response, got error: ${r.errorText}`)
+    }
+}
 
 // Reset singleton state at file start — other test files (smoke.test.ts) may
 // have spawned the singleton, which would invalidate "not alive before any
@@ -31,7 +50,7 @@ describe("getNuMcpClient — Cycle 2: lazy spawn + initialize handshake", () => 
         const response = await client.callTool("list_commands", {
             find: "where",
         })
-        expect(response.isError).toBe(false)
+        assertOk(response)
         // Output should contain the `where` builtin
         expect(response.text).toContain("where")
         expect(client.isAlive()).toBe(true)
@@ -43,7 +62,7 @@ describe("getNuMcpClient — Cycle 2: lazy spawn + initialize handshake", () => 
         const response = await client.callTool("command_help", {
             name: "where",
         })
-        expect(response.isError).toBe(false)
+        assertOk(response)
         expect(response.text).toContain("Filter values")
     })
 
@@ -65,6 +84,8 @@ describe("getNuMcpClient — Cycle 3: concurrent request correlation", () => {
             client.callTool("list_commands", { find: "where" }),
             client.callTool("command_help", { name: "where" }),
         ])
+        assertOk(list)
+        assertOk(help)
         // Each response must match its own request, not the other's.
         expect(list.text).toContain("where")
         expect(help.text).toContain("Filter values")
@@ -110,8 +131,8 @@ describe("getNuMcpClient — Cycle 4: restart on death", () => {
             client.callTool("list_commands", { find: "where" }),
             client.callTool("command_help", { name: "where" }),
         ])
-        expect(r1.isError).toBe(false)
-        expect(r2.isError).toBe(false)
+        assertOk(r1)
+        assertOk(r2)
         expect(r2.text).toContain("Filter values")
     })
 })
@@ -124,7 +145,7 @@ describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
             const response = await child.callTool("list_commands", {
                 find: "where",
             })
-            expect(response.isError).toBe(false)
+            assertOk(response)
             expect(response.text).toContain("where")
             expect(child.isAlive()).toBe(true)
         } finally {
@@ -147,7 +168,7 @@ describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
             expect(b.isAlive()).toBe(true)
             // b can still service requests after a was killed
             const response = await b.callTool("command_help", { name: "where" })
-            expect(response.isError).toBe(false)
+            assertOk(response)
             expect(response.text).toContain("Filter values")
         } finally {
             a.kill()

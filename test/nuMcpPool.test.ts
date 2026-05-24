@@ -7,8 +7,22 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { killAll as nuKillAll } from "../src/nu.js"
-import { getNuMcpClient } from "../src/nuMcpClient.js"
+import { type NuMcpToolResponse, getNuMcpClient } from "../src/nuMcpClient.js"
 import { NuMcpPool, getReplPool, parseEvaluateEnvelope } from "../src/nuMcpPool.js"
+
+/**
+ * Narrow a `NuMcpToolResponse` to its success branch. The discriminated
+ * union forbids reading `.text` without narrowing — `expect()` isn't a
+ * type guard, so each test that wants `.text` after asserting success
+ * funnels through this helper.
+ */
+function assertOk(
+    r: NuMcpToolResponse,
+): asserts r is Extract<NuMcpToolResponse, { isError: false }> {
+    if (r.isError) {
+        throw new Error(`expected success response, got error: ${r.errorText}`)
+    }
+}
 
 let pool: NuMcpPool
 
@@ -172,7 +186,7 @@ describe("NuMcpPool — Cycle 4: per-bucket serialization in pool.call", () => {
         try {
             p.spawn("solo")
             const { response: r } = await p.call("solo", "evaluate", { input: "1 + 1" })
-            expect(r.isError).toBe(false)
+            assertOk(r)
             expect(r.text).toContain("output:\"2\"")
         } finally {
             p.nukeAll()
@@ -268,7 +282,7 @@ describe("NuMcpPool — Cycle 4: per-bucket serialization in pool.call", () => {
 
             // If mutex leaked, this hangs forever; bun test will time out.
             const { response: r } = await p.call("rej", "evaluate", { input: "42" })
-            expect(r.isError).toBe(false)
+            assertOk(r)
             expect(r.text).toContain("42")
         } finally {
             p.nukeAll()
@@ -305,16 +319,27 @@ describe("NuMcpPool — Cycle 5: ring buffer + envelope cache", () => {
                 await p.call("ring", "evaluate", { input: `${i}` })
             }
             const head = p.lastResponse("ring")
-            expect(head?.text).toContain("output:\"6\"")
+            if (head === null) throw new Error("expected non-null head")
+            assertOk(head)
+            expect(head.text).toContain("output:\"6\"")
             // Inspect buffer to confirm oldest is gone — head is 6, oldest entry
             // should be 2 (entries 2..6), not 1.
             const all = p._inspectBuffer("ring")
             expect(all.length).toBe(5)
+            const first = all[0]
+            const last = all[4]
+            if (first === undefined || last === undefined) {
+                throw new Error("buffer slots populated above; unreachable")
+            }
+            assertOk(first)
+            assertOk(last)
             // Head-first ordering: index 0 is newest.
-            expect(all[0]?.text).toContain("output:\"6\"")
-            expect(all[4]?.text).toContain("output:\"2\"")
-            // 1 is evicted.
-            expect(all.find((r) => r.text.includes("output:\"1\""))).toBeUndefined()
+            expect(first.text).toContain("output:\"6\"")
+            expect(last.text).toContain("output:\"2\"")
+            // 1 is evicted. Each pushed evaluate succeeded, so every entry is
+            // on the success branch; safe to read `.text` after narrowing.
+            const found = all.find((r) => !r.isError && r.text.includes("output:\"1\""))
+            expect(found).toBeUndefined()
         } finally {
             p.nukeAll()
         }
@@ -704,7 +729,7 @@ describe("NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
             const { response, envelope } = await p.call("atomic-env", "evaluate", {
                 input: "1 + 1",
             })
-            expect(response.isError).toBe(false)
+            assertOk(response)
             expect(response.text).toContain("output:\"2\"")
             // Envelope must carry the cwd that was set before this call.
             expect(envelope.kind).toBe("ok")

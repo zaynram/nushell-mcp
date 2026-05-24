@@ -210,10 +210,20 @@ const NU_PATH: string =
 
 /**
  * Tool response in the shape the rest of the codebase expects: the text
- * payload concatenated from the MCP `content` blocks, plus the upstream's
- * `isError` flag flattened to a top-level field for caller convenience.
+ * payload concatenated from the MCP `content` blocks, flattened with the
+ * upstream's `isError` flag.
+ *
+ * Discriminated on `isError` so callers cannot read the payload without
+ * narrowing first. The success branch exposes `text`; the error branch
+ * renames the field to `errorText` — that asymmetry is intentional. It
+ * forces every callsite that propagates a response into user-visible
+ * output to choose between "show as success" or "show as diagnostic"
+ * explicitly, rather than silently rendering an error string into a
+ * field a caller treats as trusted output.
  */
-export type NuMcpToolResponse = { text: string; isError: boolean }
+export type NuMcpToolResponse =
+    | { isError: false; text: string }
+    | { isError: true; errorText: string }
 
 export interface NuMcpClient {
     /** Invoke a tool against the singleton's child. Lazy-spawns on first call. */
@@ -485,7 +495,10 @@ export class NuMcpChild {
                 ?.filter((c) => c.type === "text")
                 .map((c) => c.text)
                 .join("\n") ?? ""
-        return { text, isError: result.isError === true }
+        if (result.isError === true) {
+            return { isError: true, errorText: text }
+        }
+        return { isError: false, text }
     }
 
     kill(): void {

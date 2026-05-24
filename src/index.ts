@@ -550,6 +550,11 @@ server.registerTool(
             // cause a separate pool.envelope(key) lookup to throw "bucket does
             // not exist" even though the call itself returned a valid response.
             const { response, envelope } = await pool.call(key, "evaluate", { input })
+            // Narrow on the NuMcpToolResponse discriminator: success → text,
+            // error → errorText. The MCP wire schema for structuredContent.output
+            // stays a single string field — we map errorText back into it on
+            // the error branch so callers don't see a missing field.
+            const output = response.isError ? response.errorText : response.text
             // Branch on the envelope discriminator: only the `ok` variant
             // carries cwd/historyIndex/timestamp. An `empty` envelope (e.g.
             // a malformed evaluate response that didn't parse) emits just
@@ -558,7 +563,7 @@ server.registerTool(
                 envelope.kind === "ok"
                     ? {
                           key,
-                          output: response.text,
+                          output,
                           cwd: envelope.cwd,
                           ...(envelope.historyIndex !== undefined && {
                               historyIndex: envelope.historyIndex,
@@ -567,9 +572,9 @@ server.registerTool(
                               timestamp: envelope.timestamp,
                           }),
                       }
-                    : { key, output: response.text }
+                    : { key, output }
             return {
-                content: [{ type: "text", text: response.text }],
+                content: [{ type: "text", text: output }],
                 structuredContent,
                 isError: response.isError,
             }
@@ -614,16 +619,25 @@ server.registerTool(
     async ({ key }) => {
         try {
             const response = getReplPool().lastResponse(key)
+            // Narrow on the union for the rendered text. The wire schema
+            // (structuredContent.response) keeps a single `text` field, so
+            // we project errorText → text on the error branch — callers see
+            // a stable shape and can still discriminate via `isError`.
+            const renderedText =
+                response === null
+                    ? `Bucket "${key}" has no response yet.`
+                    : response.isError
+                      ? response.errorText
+                      : response.text
+            const structuredResponse =
+                response === null
+                    ? null
+                    : response.isError
+                      ? { isError: true as const, text: response.errorText }
+                      : { isError: false as const, text: response.text }
             return {
-                content: [
-                    {
-                        type: "text",
-                        text:
-                            response?.text ??
-                            `Bucket "${key}" has no response yet.`,
-                    },
-                ],
-                structuredContent: { key, response },
+                content: [{ type: "text", text: renderedText }],
+                structuredContent: { key, response: structuredResponse },
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err)

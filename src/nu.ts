@@ -749,10 +749,10 @@ export async function searchDocs(
         // nu --mcp's `list_commands` returns isError=true with this text
         // when no commands match — that's a valid empty result for callers,
         // not a real failure. Anything else IS a failure to surface.
-        if (response.text.includes("No matching commands found")) {
+        if (response.errorText.includes("No matching commands found")) {
             return { kind: "commands", commands: [] }
         }
-        throw new Error(`list_commands failed: ${response.text}`)
+        throw new Error(`list_commands failed: ${response.errorText}`)
     }
     const entries = parseListCommandsOutput(response.text)
     return { kind: "commands", commands: entries.slice(0, limit) }
@@ -827,7 +827,7 @@ export async function getCommandDoc(name: string): Promise<CommandDoc> {
     const response = await client.callTool("command_help", { name })
     if (response.isError) {
         const suggestions = await suggestCommands(name)
-        return { found: false, help: response.text, suggestions }
+        return { found: false, help: response.errorText, suggestions }
     }
     return { found: true, help: response.text }
 }

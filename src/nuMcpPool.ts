@@ -315,6 +315,27 @@ export class NuMcpPool {
       const { response: probe, envelope } = await this.call(key, "evaluate", {
         input: "$env | columns",
       })
+      if (probe.isError) {
+        // Probe call succeeded at the transport level but upstream tool
+        // reported an error — surface as probe-error so callers see the
+        // same shape as a thrown probe. The cached entry.envelope is the
+        // safer "what was true" reference than the probe's own envelope
+        // (which reflects post-error state). Pre-DU code matched against
+        // probe.text here unconditionally — that was a latent bug:
+        // accidental matches of `output:"[...]"` would have populated
+        // envKeys from error text.
+        const cached = entry.envelope
+        const cachedEnvelope: EvaluateEnvelope =
+          cached.kind === "ok"
+            ? {
+                kind: "ok",
+                cwd: cached.cwd,
+                historyIndex: cached.historyIndex,
+                timestamp: cached.timestamp,
+              }
+            : { kind: "empty" }
+        return { kind: "probe-error", probeError: probe.errorText, cachedEnvelope }
+      }
       // `$env | columns` returns a list rendered as `output:"[KEY1,KEY2,...]"`.
       let envKeys: string[] = []
       const match = probe.text.match(/output:"\[([^\]]*)\]"/)
