@@ -34,10 +34,10 @@ import {
     runPipeline,
     searchDocs,
 } from "./nu.js"
-import { getReplPool } from "./nuMcpPool.js"
+import { type BucketStatus, getReplPool } from "./nuMcpPool.js"
 
 /** Build the human-readable text block for a `nu_exec` result. */
-function renderRun(result: PipelineResult, timeoutMs: number): string {
+function renderExec(result: PipelineResult, timeoutMs: number): string {
     const parts = [result.stdout.replace(/\s+$/, "") || "(no output)"]
     if (result.stderr.trim()) parts.push(`\n[stderr]\n${result.stderr.trim()}`)
     if (result.resultType && result.resultType !== "nothing") {
@@ -182,7 +182,7 @@ server.registerTool(
             })
             return {
                 content: [
-                    { type: "text", text: renderRun(result, effectiveTimeout) },
+                    { type: "text", text: renderExec(result, effectiveTimeout) },
                 ],
                 structuredContent: {
                     stdout: result.stdout,
@@ -609,7 +609,7 @@ server.registerTool(
     async ({ key, mode }) => {
         const effective = mode ?? "all"
         try {
-            getReplPool().clear(key, effective)
+            await getReplPool().clear(key, effective)
             return {
                 content: [
                     {
@@ -638,7 +638,9 @@ server.registerTool(
             "Return the bucket's current `cwd`, `historyIndex`, last " +
             "`timestamp` (from the cached envelope), and `envKeys` (probed " +
             "side-channel via `$env | columns`). The env probe increments " +
-            "the bucket's history index — treat the snapshot as best-effort.",
+            "the bucket's history index — treat the snapshot as best-effort. " +
+            "Probe failures surface as `probeError` rather than throwing; " +
+            "when set, `envKeys` will be an empty array.",
         inputSchema: { key: REPL_KEY },
         outputSchema: {
             key: z.string(),
@@ -646,6 +648,7 @@ server.registerTool(
             historyIndex: z.number().optional(),
             timestamp: z.string().optional(),
             envKeys: z.array(z.string()),
+            probeError: z.string().optional(),
         },
         annotations: {
             readOnlyHint: false,
@@ -656,12 +659,15 @@ server.registerTool(
     },
     async ({ key }) => {
         try {
-            const status = await getReplPool().status(key)
+            const status: BucketStatus = await getReplPool().status(key)
+            const probeNote = status.probeError
+                ? `\n  probeError: ${status.probeError}`
+                : ""
             const summary = [
                 `Bucket "${key}":`,
                 `  cwd: ${status.cwd ?? "(unknown)"}`,
                 `  historyIndex: ${status.historyIndex ?? "(unknown)"}`,
-                `  envKeys: ${status.envKeys.length} entries`,
+                `  envKeys: ${status.envKeys.length} entries${probeNote}`,
             ].join("\n")
             return {
                 content: [{ type: "text", text: summary }],

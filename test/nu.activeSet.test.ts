@@ -10,6 +10,8 @@ import {
     runRaw,
     sanitizeKey,
 } from "../src/nu.js"
+import { NuMcpChild } from "../src/nuMcpClient.js"
+import { NuMcpPool } from "../src/nuMcpPool.js"
 
 afterAll(() => {
     killAll()
@@ -57,4 +59,71 @@ describe("active set role tagging (Cycle 0)", () => {
         const r = await pending
         expect(r.exitCode).not.toBe(0)
     }, 15_000)
+})
+
+describe("active set role tagging — NuMcpChild (repl + doc)", () => {
+    test("a spawned NuMcpChild('repl') appears in active set as 'repl'", async () => {
+        const child = new NuMcpChild("repl")
+        try {
+            // ensureReady triggers startup() and addActive.
+            await child.callTool("list_commands", { find: "where" })
+            const roles = _getActiveRoles()
+            expect(roles).toContain("repl")
+        } finally {
+            child.kill()
+        }
+    })
+
+    test("after kill(), repl child is removed from active set", async () => {
+        const child = new NuMcpChild("repl")
+        await child.callTool("list_commands", { find: "where" })
+        expect(_getActiveRoles()).toContain("repl")
+        child.kill()
+        // kill() calls removeActive synchronously.
+        const roles = _getActiveRoles()
+        expect(roles.filter((r) => r === "repl").length).toBe(0)
+    })
+
+    test("a spawned NuMcpChild('doc') appears in active set as 'doc'", async () => {
+        const child = new NuMcpChild("doc")
+        try {
+            await child.callTool("list_commands", { find: "where" })
+            const roles = _getActiveRoles()
+            expect(roles).toContain("doc")
+        } finally {
+            child.kill()
+        }
+    })
+
+    test("after kill(), doc child is removed from active set", async () => {
+        const child = new NuMcpChild("doc")
+        await child.callTool("list_commands", { find: "where" })
+        expect(_getActiveRoles()).toContain("doc")
+        child.kill()
+        const roles = _getActiveRoles()
+        expect(roles.filter((r) => r === "doc").length).toBe(0)
+    })
+
+    test("pool spawn registers child as 'repl' in active set", async () => {
+        const pool = new NuMcpPool({ maxRepls: 1 })
+        try {
+            pool.spawn("activetest")
+            // Trigger lazy spawn via a real call.
+            await pool.call("activetest", "evaluate", { input: "1" })
+            const roles = _getActiveRoles()
+            expect(roles).toContain("repl")
+        } finally {
+            pool.nukeAll()
+        }
+    })
+
+    test("pool nukeAll removes repl children from active set", async () => {
+        const pool = new NuMcpPool({ maxRepls: 1 })
+        pool.spawn("activeclean")
+        await pool.call("activeclean", "evaluate", { input: "1" })
+        expect(_getActiveRoles()).toContain("repl")
+        pool.nukeAll()
+        const roles = _getActiveRoles()
+        expect(roles.filter((r) => r === "repl").length).toBe(0)
+    })
 })

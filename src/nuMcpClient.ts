@@ -201,6 +201,8 @@ export function parseListCommandsOutput(text: string): ListCommandEntry[] {
 
 // --- Singleton client lifecycle --------------------------------------------
 
+import { type ActiveRole, addActive, removeActive } from "./active.js"
+
 /** Path to `nu`. Honors `NUSHELL_MCP_NU_PATH`; falls back to `nu` on PATH. */
 const NU_PATH: string =
     process.env.NUSHELL_MCP_NU_PATH ?? Bun.which("nu") ?? "nu"
@@ -244,6 +246,11 @@ export class NuMcpChild {
     pending = new Map<JsonRpcId, RpcHandler>()
     private exitListeners: (() => void)[] = []
     private exited = false
+    private readonly role: ActiveRole
+
+    constructor(role: ActiveRole = "doc") {
+        this.role = role
+    }
 
     isAlive(): boolean {
         return this.proc !== null && this.proc.exitCode === null
@@ -294,6 +301,7 @@ export class NuMcpChild {
             { stdin: "pipe", stdout: "pipe", stderr: "ignore" },
         )
         this.proc = proc
+        addActive(proc, this.role)
         // A child instance may be reused after a previous death (singleton
         // restart-on-death). Re-arm the exit gate so the next death fires
         // any newly-attached listeners.
@@ -314,6 +322,7 @@ export class NuMcpChild {
      */
     private handleExit(proc: Bun.Subprocess): void {
         if (this.proc !== proc) return
+        removeActive(proc)
         for (const handler of this.pending.values()) {
             handler.reject(new Error("nu --mcp child exited"))
         }
@@ -436,6 +445,7 @@ export class NuMcpChild {
 
     kill(): void {
         if (this.proc) {
+            removeActive(this.proc)
             try {
                 this.proc.kill()
             } catch {
@@ -464,7 +474,7 @@ let singletonChild: NuMcpChild | null = null
  * directly instead of going through this getter.
  */
 export function getNuMcpClient(): NuMcpClient {
-    if (!singletonChild) singletonChild = new NuMcpChild()
+    if (!singletonChild) singletonChild = new NuMcpChild("doc")
     const child = singletonChild
     return {
         callTool: (name, args) => child.callTool(name, args),

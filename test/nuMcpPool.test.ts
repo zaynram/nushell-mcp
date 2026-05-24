@@ -428,6 +428,31 @@ describe("NuMcpPool — Cycle 6: crash policy + killAll integration", () => {
     })
 })
 
+describe("NuMcpPool — status() probeError surfacing", () => {
+    test("probeError is set when the child subprocess dies before the probe completes", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        try {
+            const child = p.spawn("probe-err")
+            // Trigger lazy spawn so child.proc is populated.
+            await p.call("probe-err", "evaluate", { input: "1" })
+            // Kill the raw Bun subprocess directly — NOT child.kill(), which
+            // would synchronously prune the bucket and make status() throw
+            // "does not exist" before the probe even starts.
+            child.proc!.kill()
+            // status() sees the bucket entry still alive (onExit fires async)
+            // but the probe evaluate call will fail because the child is dead.
+            const result = await p.status("probe-err")
+            expect(result.envKeys).toEqual([])
+            expect(result.probeError).toBeDefined()
+            expect(typeof result.probeError).toBe("string")
+            // The error message should mention the child dying or stdin being gone.
+            expect(result.probeError).toMatch(/child|exited|killed|stdin/i)
+        } finally {
+            p.nukeAll()
+        }
+    })
+})
+
 describe("parseEvaluateEnvelope — pure helper", () => {
     test("extracts cwd, history_index, timestamp from a canonical envelope", () => {
         const text = `{cwd:/home/ramda/code/nushell-mcp,history_index:5,timestamp:2026-05-23T19:29:15.835595276+00:00,output:"42"}`

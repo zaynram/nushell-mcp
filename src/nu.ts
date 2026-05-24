@@ -13,6 +13,11 @@ import { unlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+    active,
+    addActive,
+    removeActive,
+} from "./active.js"
+import {
     type ListCommandEntry,
     getNuMcpClient,
     parseListCommandsOutput,
@@ -28,32 +33,16 @@ export const DEFAULT_TIMEOUT_MS: number = Number(
     process.env.NUSHELL_MCP_TIMEOUT_MS ?? 30_000,
 )
 
-/**
- * Role tag for entries in the `active` map. Used by selective kill paths:
- *   - `"exec"` — one-shot nu pipelines spawned via `spawnNu`.
- *   - `"bash"` — bash-bridge subprocesses spawned via `dumpEnv` for bashEnv.
- *
- * Plan B adds `"repl"` (pool members) and `"doc"` (singleton) once those
- * spawn sites land. For now only the two ephemeral roles are tracked here;
- * pool and doc are managed independently by their own modules.
- */
-export type ActiveRole = "exec" | "bash" | "repl" | "doc"
-
-// Every nu/bash subprocess this server has spawned and not yet reaped. The
-// role tag lets `nu_exec_abort` (Plan B Cycle 12) filter for in-flight execs
-// without also killing bash bridges. `killAll` ignores the tag and kills
-// every entry.
-const active = new Map<Bun.Subprocess, ActiveRole>()
+// Re-export from active.ts so existing imports from nu.ts continue to work.
+export type { ActiveRole } from "./active.js"
 
 /**
  * Test-only accessor exposing the role tags of currently-tracked
  * subprocesses. Underscore prefix flags this as not part of the stable
- * surface — consumers outside tests should use `killAll` / future
- * `abortExec`.
+ * surface — consumers outside tests should use `killAll` / `abortExec`.
+ * Re-exported from `active.ts` to avoid breaking existing test imports.
  */
-export function _getActiveRoles(): ActiveRole[] {
-    return Array.from(active.values())
-}
+export { _getActiveRoles } from "./active.js"
 
 export interface RunOptions {
     /** Directory to spawn `nu` in. Defaults to the server's working directory. */
@@ -110,7 +99,7 @@ async function spawnNu(argv: string[], opts: RunOptions): Promise<RawResult> {
         stdout: "pipe",
         stderr: "pipe",
     })
-    active.set(proc, "exec")
+    addActive(proc, "exec")
 
     let timedOut = false
     const timer = setTimeout(() => {
@@ -129,7 +118,7 @@ async function spawnNu(argv: string[], opts: RunOptions): Promise<RawResult> {
         return { stdout, stderr, exitCode: proc.exitCode, timedOut }
     } finally {
         clearTimeout(timer)
-        active.delete(proc)
+        removeActive(proc)
     }
 }
 
@@ -192,7 +181,7 @@ function buildScript(o: ScriptOptions): string {
     return lines.join("\n") + "\n"
 }
 
-// --- Persistence bucket helpers --------------------------------------------
+// --- Bucket key validation -------------------------------------------------
 
 const BUCKET_KEY_RE = /^[A-Za-z0-9_-]+$/
 
@@ -380,7 +369,7 @@ async function dumpEnv(
         stdout: "pipe",
         stderr: "pipe",
     })
-    active.set(proc, "bash")
+    addActive(proc, "bash")
 
     // Race the drain against an explicit timeout promise. We can't rely on
     // `proc.kill()` + drain to short-circuit, because `bash -c "sleep N"`
@@ -429,7 +418,7 @@ async function dumpEnv(
         return parseEnv0(envText)
     } finally {
         if (timerId !== undefined) clearTimeout(timerId)
-        active.delete(proc)
+        removeActive(proc)
     }
 }
 
@@ -632,7 +621,7 @@ export function abortExec(): number {
         } catch {
             // Already gone — fine.
         }
-        active.delete(proc)
+        removeActive(proc)
         aborted++
     }
     return aborted
@@ -641,18 +630,18 @@ export function abortExec(): number {
 /** Terminate every nu process this server currently has in flight. */
 export function killAll(): number {
     let killed = 0
-    // Kill the doc singleton (Plan A) before iterating active set. The
-    // singleton isn't tracked in `active` so killAll owns both paths and
-    // can't double-kill.
+    // Kill the doc singleton (Plan A). NuMcpChild.kill() removes it from
+    // `active` so the tail-loop below won't double-count it.
     const docClient = getNuMcpClient()
     if (docClient.isAlive()) {
         docClient.kill()
         killed++
     }
-    // Nuke the REPL pool (Plan B). The import resolves via a static cycle
-    // with nuMcpPool.ts; only function references are touched, no top-level
-    // values, so the cycle is safe.
+    // Nuke the REPL pool (Plan B). Each NuMcpChild.kill() inside nukeAll()
+    // removes the child from `active`, so the tail-loop won't double-count.
     killed += getReplPool().nukeAll()
+    // Any remaining entries in `active` are ephemeral exec/bash procs
+    // (NuMcpChild instances self-remove via their own kill() path).
     for (const [proc] of active) {
         try {
             proc.kill()

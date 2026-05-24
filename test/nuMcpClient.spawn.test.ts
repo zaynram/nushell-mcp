@@ -118,7 +118,7 @@ describe("getNuMcpClient — Cycle 4: restart on death", () => {
 
 describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
     test("new NuMcpChild() can be created without going through the singleton", async () => {
-        const child = new NuMcpChild()
+        const child = new NuMcpChild("doc")
         try {
             expect(child.isAlive()).toBe(false)
             const response = await child.callTool("list_commands", {
@@ -133,8 +133,8 @@ describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
     })
 
     test("two NuMcpChild instances are isolated — killing one leaves the other alive", async () => {
-        const a = new NuMcpChild()
-        const b = new NuMcpChild()
+        const a = new NuMcpChild("doc")
+        const b = new NuMcpChild("doc")
         try {
             await Promise.all([
                 a.callTool("list_commands", { find: "ls" }),
@@ -158,7 +158,7 @@ describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
     test("singleton and a fresh NuMcpChild instance don't share lifecycle", async () => {
         // Reset singleton first so we know its state.
         getNuMcpClient().kill()
-        const fresh = new NuMcpChild()
+        const fresh = new NuMcpChild("doc")
         try {
             await fresh.callTool("list_commands", { find: "ls" })
             expect(fresh.isAlive()).toBe(true)

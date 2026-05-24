@@ -41,6 +41,17 @@ export interface EvaluateEnvelope {
 }
 
 /**
+ * Return type of `NuMcpPool.status()`. Combines the cached envelope with a
+ * freshly-probed env key list. `probeError` is set when the side-channel
+ * `$env | columns` probe fails (e.g. the child has died); callers that
+ * need to surface the error can inspect it instead of getting an exception.
+ */
+export interface BucketStatus extends EvaluateEnvelope {
+  envKeys: string[]
+  probeError?: string
+}
+
+/**
  * Pure: extract envelope fields from an `evaluate` response's text. Tolerant
  * of field reordering, missing fields, and non-envelope inputs (returns `{}`
  * rather than throwing).
@@ -95,7 +106,7 @@ export class NuMcpPool {
     if (this.buckets.size >= this.maxRepls)
       throw Error(`maximum active repls reached (limit: ${this.maxRepls})`)
 
-    const child = new NuMcpChild()
+    const child = new NuMcpChild("repl")
     const entry: BucketEntry = {
       child,
       mutex: new Mutex(),
@@ -222,14 +233,15 @@ export class NuMcpPool {
    * Snapshot the bucket's last-known state. Combines the cached envelope
    * (cwd, historyIndex, timestamp) with a fresh side-channel probe of
    * `$env | columns` for env keys. The probe increments the bucket's
-   * history_index — callers should treat env_keys as best-effort.
+   * history_index — callers should treat env_keys as best-effort. Probe
+   * failures surface as `probeError` rather than throwing, so the caller
+   * always receives a result even when the child has died.
    */
-  async status(key: string): Promise<
-    EvaluateEnvelope & { envKeys: string[] }
-  > {
+  async status(key: string): Promise<BucketStatus> {
     const entry = this.buckets.get(key)
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
     let envKeys: string[] = []
+    let probeError: string | undefined
     try {
       const probe = await this.call(key, "evaluate", {
         input: "$env | columns",
@@ -242,13 +254,14 @@ export class NuMcpPool {
           .map((s) => s.trim())
           .filter(Boolean)
       }
-    } catch {
-      // Side-channel probe failed — return envelope-only status.
+    } catch (err) {
+      // Side-channel probe failed — surface as probeError rather than throwing.
+      probeError = err instanceof Error ? err.message : String(err)
     }
     // Return the post-probe envelope; the probe both increments
     // history_index and is the freshest snapshot of cwd / timestamp.
     const after = this.buckets.get(key)?.envelope ?? {}
-    return { ...after, envKeys }
+    return { ...after, envKeys, ...(probeError !== undefined && { probeError }) }
   }
 
   /**
