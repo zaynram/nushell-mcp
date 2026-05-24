@@ -30,31 +30,46 @@ function resolveMaxRepls(opt: NuMcpPoolOptions | undefined): number {
 }
 
 /**
- * Envelope fields the `evaluate` tool returns alongside `output`. Each field
- * is optional because parser callers may receive non-envelope responses
- * (e.g. plain-text from `list_commands`) and must not crash.
+ * Envelope fields the `evaluate` tool returns alongside `output`. Modeled as
+ * a discriminated union so callers must narrow on `kind` before reading
+ * payload fields — the prior all-optional shape collapsed "never evaluated",
+ * "parse failed", and "valid" into one shape that callers could not tell
+ * apart. `cwd` is required on the `ok` variant because it is the anchor
+ * field: `parseEvaluateEnvelope` returns `{kind: "empty"}` when cwd is
+ * absent (parse failed or non-envelope text), and `{kind: "ok", cwd, ...}`
+ * otherwise.
  */
-export interface EvaluateEnvelope {
-  cwd?: string
-  historyIndex?: number
-  timestamp?: string
-}
+export type EvaluateEnvelope =
+  | { kind: "empty" }
+  | { kind: "ok"; cwd: string; historyIndex?: number; timestamp?: string }
 
 /**
- * Return type of `NuMcpPool.status()`. Combines the cached envelope with a
- * freshly-probed env key list. `probeError` is set when the side-channel
- * `$env | columns` probe fails (e.g. the child has died); callers that
- * need to surface the error can inspect it instead of getting an exception.
+ * Return type of `NuMcpPool.status()`. Bifurcates independently from
+ * `EvaluateEnvelope`: status reports whether the side-channel probe of
+ * `$env | columns` succeeded (`ok`) or failed (`probe-error`). On
+ * probe-error the cached envelope from before the failed probe is carried
+ * explicitly as `cachedEnvelope` so callers do not have to remember to look
+ * for stale fields on a "mostly-empty" object.
  */
-export interface BucketStatus extends EvaluateEnvelope {
-  envKeys: string[]
-  probeError?: string
-}
+export type BucketStatus =
+  | {
+      kind: "ok"
+      cwd?: string
+      historyIndex?: number
+      timestamp?: string
+      envKeys: string[]
+    }
+  | {
+      kind: "probe-error"
+      probeError: string
+      cachedEnvelope: EvaluateEnvelope
+    }
 
 /**
  * Pure: extract envelope fields from an `evaluate` response's text. Tolerant
- * of field reordering, missing fields, and non-envelope inputs (returns `{}`
- * rather than throwing).
+ * of field reordering, missing fields, and non-envelope inputs — returns
+ * `{kind: "empty"}` when no `cwd` is present (e.g. plain-text from
+ * `list_commands`), or `{kind: "ok", cwd, ...}` when it is.
  *
  * The `timestamp` string is preserved verbatim — nanosecond precision
  * (`+00:00` with 9 fractional digits) does not round-trip through `Date`.
@@ -73,8 +88,8 @@ export function parseEvaluateEnvelope(text: string): EvaluateEnvelope {
   }
 
   const cwd = parseNuonField("cwd")
-  if (!cwd) return {}
-  const env: EvaluateEnvelope = { cwd }
+  if (!cwd) return { kind: "empty" }
+  const env: EvaluateEnvelope = { kind: "ok", cwd }
   const hist = parseNuonField("history_index")
   if (hist) {
     const n = Number.parseInt(hist, 10)
@@ -120,7 +135,7 @@ export class NuMcpPool {
       child,
       mutex: new Mutex(),
       buffer: [],
-      envelope: {},
+      envelope: { kind: "empty" },
     }
     // Prune the bucket when its child dies (crash or external kill). Guard
     // against a spawn-with-same-key race: only delete if the current map
@@ -180,14 +195,36 @@ export class NuMcpPool {
         entry.buffer.length = RING_BUFFER_SIZE
       }
       // Update envelope cache only when fields are present (e.g. `evaluate`).
+      // A `{kind: "empty"}` parse leaves the cache untouched (non-envelope
+      // responses like `list_commands` should not erase prior state). A
+      // `{kind: "ok"}` parse promotes the cache to `ok`, preserving prior
+      // history_index / timestamp when the new parse omits them.
       if (toolName === "evaluate" && !response.isError) {
         const parsed = parseEvaluateEnvelope(response.text)
-        entry.envelope = { ...entry.envelope, ...parsed }
+        if (parsed.kind === "ok") {
+          const prior = entry.envelope.kind === "ok" ? entry.envelope : undefined
+          entry.envelope = {
+            kind: "ok",
+            cwd: parsed.cwd,
+            historyIndex: parsed.historyIndex ?? prior?.historyIndex,
+            timestamp: parsed.timestamp ?? prior?.timestamp,
+          }
+        }
       }
       // Snapshot the envelope while still holding the mutex so the caller
       // gets an atomic {response, envelope} pair even if the child dies after
-      // the mutex is released.
-      const envelope = { ...entry.envelope }
+      // the mutex is released. Explicit per-variant copy preserves the
+      // discriminator narrowing (vs. a bare spread, which is technically
+      // sound under strict TS but obscures intent).
+      const envelope: EvaluateEnvelope =
+        entry.envelope.kind === "ok"
+          ? {
+              kind: "ok",
+              cwd: entry.envelope.cwd,
+              historyIndex: entry.envelope.historyIndex,
+              timestamp: entry.envelope.timestamp,
+            }
+          : { kind: "empty" }
       return { response, envelope }
     } finally {
       release()
@@ -215,7 +252,14 @@ export class NuMcpPool {
   envelope(key: string): EvaluateEnvelope {
     const entry = this.buckets.get(key)
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    return { ...entry.envelope }
+    return entry.envelope.kind === "ok"
+      ? {
+          kind: "ok",
+          cwd: entry.envelope.cwd,
+          historyIndex: entry.envelope.historyIndex,
+          timestamp: entry.envelope.timestamp,
+        }
+      : { kind: "empty" }
   }
 
   /** Test-only: inspect the full ring buffer contents (head-first). */
@@ -267,15 +311,12 @@ export class NuMcpPool {
   async status(key: string): Promise<BucketStatus> {
     const entry = this.buckets.get(key)
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    let envKeys: string[] = []
-    let probeError: string | undefined
-    let afterEnvelope: EvaluateEnvelope = {}
     try {
       const { response: probe, envelope } = await this.call(key, "evaluate", {
         input: "$env | columns",
       })
-      afterEnvelope = envelope
       // `$env | columns` returns a list rendered as `output:"[KEY1,KEY2,...]"`.
+      let envKeys: string[] = []
       const match = probe.text.match(/output:"\[([^\]]*)\]"/)
       if (match?.[1]) {
         envKeys = match[1]
@@ -283,15 +324,38 @@ export class NuMcpPool {
           .map((s) => s.trim())
           .filter(Boolean)
       }
+      // Return the post-probe envelope; the probe both increments
+      // history_index and is the freshest snapshot of cwd / timestamp.
+      if (envelope.kind === "ok") {
+        return {
+          kind: "ok",
+          cwd: envelope.cwd,
+          historyIndex: envelope.historyIndex,
+          timestamp: envelope.timestamp,
+          envKeys,
+        }
+      }
+      return { kind: "ok", envKeys }
     } catch (err) {
-      // Side-channel probe failed — surface as probeError rather than throwing.
-      probeError = err instanceof Error ? err.message : String(err)
-      // Fall back to the cached envelope from before the failed probe.
-      afterEnvelope = this.buckets.get(key)?.envelope ?? {}
+      // Side-channel probe failed — surface as probe-error rather than
+      // throwing. Carry the cached envelope from before the failed probe
+      // explicitly so callers do not have to dig for stale fields. Read
+      // the cache off the captured `entry` reference (not a fresh map
+      // lookup) so a child death that pruned the bucket between probe
+      // start and probe failure does not erase the cached envelope.
+      const probeError = err instanceof Error ? err.message : String(err)
+      const cached = entry.envelope
+      const cachedEnvelope: EvaluateEnvelope =
+        cached.kind === "ok"
+          ? {
+              kind: "ok",
+              cwd: cached.cwd,
+              historyIndex: cached.historyIndex,
+              timestamp: cached.timestamp,
+            }
+          : { kind: "empty" }
+      return { kind: "probe-error", probeError, cachedEnvelope }
     }
-    // Return the post-probe envelope; the probe both increments
-    // history_index and is the freshest snapshot of cwd / timestamp.
-    return { ...afterEnvelope, envKeys, ...(probeError !== undefined && { probeError }) }
   }
 
   /**

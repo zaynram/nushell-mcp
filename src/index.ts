@@ -550,13 +550,27 @@ server.registerTool(
             // cause a separate pool.envelope(key) lookup to throw "bucket does
             // not exist" even though the call itself returned a valid response.
             const { response, envelope } = await pool.call(key, "evaluate", { input })
+            // Branch on the envelope discriminator: only the `ok` variant
+            // carries cwd/historyIndex/timestamp. An `empty` envelope (e.g.
+            // a malformed evaluate response that didn't parse) emits just
+            // key + output, matching the optional-field outputSchema.
+            const structuredContent =
+                envelope.kind === "ok"
+                    ? {
+                          key,
+                          output: response.text,
+                          cwd: envelope.cwd,
+                          ...(envelope.historyIndex !== undefined && {
+                              historyIndex: envelope.historyIndex,
+                          }),
+                          ...(envelope.timestamp !== undefined && {
+                              timestamp: envelope.timestamp,
+                          }),
+                      }
+                    : { key, output: response.text }
             return {
                 content: [{ type: "text", text: response.text }],
-                structuredContent: {
-                    key,
-                    output: response.text,
-                    ...envelope,
-                },
+                structuredContent,
                 isError: response.isError,
             }
         } catch (err) {
@@ -700,18 +714,60 @@ server.registerTool(
     async ({ key }) => {
         try {
             const status: BucketStatus = await getReplPool().status(key)
-            const probeNote = status.probeError
-                ? `\n  probeError: ${status.probeError}`
-                : ""
+            // Branch on the status discriminator. The `ok` variant carries
+            // envKeys plus the post-probe envelope fields; the `probe-error`
+            // variant carries probeError plus the cached envelope from
+            // before the probe failed (envKeys is empty in this case).
+            if (status.kind === "ok") {
+                const summary = [
+                    `Bucket "${key}":`,
+                    `  cwd: ${status.cwd ?? "(unknown)"}`,
+                    `  historyIndex: ${status.historyIndex ?? "(unknown)"}`,
+                    `  envKeys: ${status.envKeys.length} entries`,
+                ].join("\n")
+                return {
+                    content: [{ type: "text", text: summary }],
+                    structuredContent: {
+                        key,
+                        ...(status.cwd !== undefined && { cwd: status.cwd }),
+                        ...(status.historyIndex !== undefined && {
+                            historyIndex: status.historyIndex,
+                        }),
+                        ...(status.timestamp !== undefined && {
+                            timestamp: status.timestamp,
+                        }),
+                        envKeys: status.envKeys,
+                    },
+                }
+            }
+            // probe-error: surface cached envelope fields if any.
+            const cached = status.cachedEnvelope
             const summary = [
                 `Bucket "${key}":`,
-                `  cwd: ${status.cwd ?? "(unknown)"}`,
-                `  historyIndex: ${status.historyIndex ?? "(unknown)"}`,
-                `  envKeys: ${status.envKeys.length} entries${probeNote}`,
+                `  cwd: ${cached.kind === "ok" ? cached.cwd : "(unknown)"}`,
+                `  historyIndex: ${
+                    cached.kind === "ok" && cached.historyIndex !== undefined
+                        ? cached.historyIndex
+                        : "(unknown)"
+                }`,
+                `  envKeys: 0 entries\n  probeError: ${status.probeError}`,
             ].join("\n")
             return {
                 content: [{ type: "text", text: summary }],
-                structuredContent: { key, ...status },
+                structuredContent: {
+                    key,
+                    ...(cached.kind === "ok" && {
+                        cwd: cached.cwd,
+                        ...(cached.historyIndex !== undefined && {
+                            historyIndex: cached.historyIndex,
+                        }),
+                        ...(cached.timestamp !== undefined && {
+                            timestamp: cached.timestamp,
+                        }),
+                    }),
+                    envKeys: [],
+                    probeError: status.probeError,
+                },
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err)

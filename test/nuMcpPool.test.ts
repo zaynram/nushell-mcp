@@ -342,6 +342,8 @@ describe("NuMcpPool — Cycle 5: ring buffer + envelope cache", () => {
             p.spawn("env")
             await p.call("env", "evaluate", { input: "cd /tmp" })
             const env = p.envelope("env")
+            expect(env.kind).toBe("ok")
+            if (env.kind !== "ok") throw new Error("envelope not ok")
             expect(env.cwd).toBe("/tmp")
         } finally {
             p.nukeAll()
@@ -353,9 +355,13 @@ describe("NuMcpPool — Cycle 5: ring buffer + envelope cache", () => {
         try {
             p.spawn("hist")
             await p.call("hist", "evaluate", { input: "1" })
-            const first = p.envelope("hist").historyIndex
+            const env1 = p.envelope("hist")
+            if (env1.kind !== "ok") throw new Error("env1 not ok")
+            const first = env1.historyIndex
             await p.call("hist", "evaluate", { input: "2" })
-            const second = p.envelope("hist").historyIndex
+            const env2 = p.envelope("hist")
+            if (env2.kind !== "ok") throw new Error("env2 not ok")
+            const second = env2.historyIndex
             expect(typeof first).toBe("number")
             expect(typeof second).toBe("number")
             expect(second).toBeGreaterThan(first ?? -1)
@@ -442,11 +448,15 @@ describe("NuMcpPool — status() probeError surfacing", () => {
             // status() sees the bucket entry still alive (onExit fires async)
             // but the probe evaluate call will fail because the child is dead.
             const result = await p.status("probe-err")
-            expect(result.envKeys).toEqual([])
+            expect(result.kind).toBe("probe-error")
+            if (result.kind !== "probe-error") throw new Error("expected probe-error")
             expect(result.probeError).toBeDefined()
             expect(typeof result.probeError).toBe("string")
             // The error message should mention the child dying or stdin being gone.
             expect(result.probeError).toMatch(/child|exited|killed|stdin/i)
+            // The cached envelope (from the prior successful evaluate) is
+            // carried explicitly on the probe-error variant.
+            expect(result.cachedEnvelope.kind).toBe("ok")
         } finally {
             p.nukeAll()
         }
@@ -547,6 +557,8 @@ describe("parseEvaluateEnvelope — pure helper", () => {
     test("extracts cwd, history_index, timestamp from a canonical envelope", () => {
         const text = `{cwd:/home/ramda/code/nushell-mcp,history_index:5,timestamp:2026-05-23T19:29:15.835595276+00:00,output:"42"}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/home/ramda/code/nushell-mcp")
         expect(env.historyIndex).toBe(5)
         expect(env.timestamp).toBe("2026-05-23T19:29:15.835595276+00:00")
@@ -555,19 +567,23 @@ describe("parseEvaluateEnvelope — pure helper", () => {
     test("tolerates reordered fields", () => {
         const text = `{history_index:7, output:"x", cwd:/tmp, timestamp:2026-01-01T00:00:00.000000000+00:00}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/tmp")
         expect(env.historyIndex).toBe(7)
         expect(env.timestamp).toBe("2026-01-01T00:00:00.000000000+00:00")
     })
 
-    test("returns empty object for non-envelope text (e.g. list_commands plaintext)", () => {
+    test("returns empty variant for non-envelope text (e.g. list_commands plaintext)", () => {
         const env = parseEvaluateEnvelope("ls: list files\nwhere: filter\n")
-        expect(env).toEqual({})
+        expect(env).toEqual({ kind: "empty" })
     })
 
-    test("returns partial object when some fields are missing", () => {
+    test("returns ok variant with only cwd when other fields are missing", () => {
         const text = `{cwd:/var/log, output:"ok"}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/var/log")
         expect(env.historyIndex).toBeUndefined()
         expect(env.timestamp).toBeUndefined()
@@ -577,6 +593,8 @@ describe("parseEvaluateEnvelope — pure helper", () => {
     test("cwd with a single internal space is captured in full", () => {
         const text = `{cwd:/home/user/My Documents,history_index:1,timestamp:2026-01-01T00:00:00.000000000+00:00,output:"ok"}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/home/user/My Documents")
         expect(env.historyIndex).toBe(1)
     })
@@ -584,6 +602,8 @@ describe("parseEvaluateEnvelope — pure helper", () => {
     test("cwd with multiple internal spaces is captured in full", () => {
         const text = `{cwd:/home/user/path with many spaces,history_index:2,timestamp:2026-01-01T00:00:00.000000000+00:00,output:"ok"}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/home/user/path with many spaces")
         expect(env.historyIndex).toBe(2)
     })
@@ -591,12 +611,16 @@ describe("parseEvaluateEnvelope — pure helper", () => {
     test("cwd appears at the start of the envelope (no preceding comma)", () => {
         const text = `{cwd:/tmp/spaced path,output:"x"}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/tmp/spaced path")
     })
 
     test("cwd appears at the end of the envelope (last field before closing brace)", () => {
         const text = `{output:"x",history_index:3,cwd:/end spaced path}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/end spaced path")
         expect(env.historyIndex).toBe(3)
     })
@@ -608,6 +632,8 @@ describe("parseEvaluateEnvelope — pure helper", () => {
     test("cwd with trailing spaces before a comma is stripped (mid-envelope)", () => {
         const text = `{cwd:/foo bar   ,history_index:5,timestamp:0}`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/foo bar")
         expect(env.historyIndex).toBe(5)
     })
@@ -615,6 +641,8 @@ describe("parseEvaluateEnvelope — pure helper", () => {
     test("cwd with trailing spaces before closing brace is stripped (end-of-envelope)", () => {
         const text = `{history_index:5,timestamp:0,cwd:/foo bar   }`
         const env = parseEvaluateEnvelope(text)
+        expect(env.kind).toBe("ok")
+        if (env.kind !== "ok") throw new Error("expected ok")
         expect(env.cwd).toBe("/foo bar")
     })
 })
@@ -679,6 +707,8 @@ describe("NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
             expect(response.isError).toBe(false)
             expect(response.text).toContain("output:\"2\"")
             // Envelope must carry the cwd that was set before this call.
+            expect(envelope.kind).toBe("ok")
+            if (envelope.kind !== "ok") throw new Error("envelope not ok")
             expect(envelope.cwd).toBeDefined()
             expect(typeof envelope.historyIndex).toBe("number")
         } finally {
@@ -702,6 +732,8 @@ describe("NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
             // it was captured inside the mutex, so no separate lookup is needed.
             expect(p.has("pruned-env")).toBe(false)
             expect(response.isError).toBe(false)
+            expect(envelope.kind).toBe("ok")
+            if (envelope.kind !== "ok") throw new Error("envelope not ok")
             expect(envelope.cwd).toBeDefined()
         } finally {
             p.nukeAll()
