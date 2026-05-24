@@ -350,8 +350,20 @@ export class NuMcpChild {
                     if (line.trim()) this.dispatchLine(line)
                 }
             }
-        } catch {
-            // Reader closed; child exit handled by Cycle 4 (restart-on-death).
+        } catch (err) {
+            // Non-exit reader error (backpressure, lock contention, decoder
+            // failure, etc.). Kill the child so handleExit fires promptly and
+            // rejects all pending requests with "nu --mcp child exited" rather
+            // than leaving them to hang indefinitely. Without this kill(),
+            // sendRpc callers have no REPL-side timeout to save them.
+            process.stderr.write(
+                `[nushell-mcp] runStdoutReader error: ${err}\n`,
+            )
+            try {
+                proc.kill()
+            } catch {
+                // Already gone — fine.
+            }
         }
     }
 
@@ -359,8 +371,16 @@ export class NuMcpChild {
         let msg: DecodedMessage
         try {
             msg = decodeMessage(line)
-        } catch {
-            // Malformed line from the child — discard. (Could log in future.)
+        } catch (err) {
+            // Malformed line from the child — discard and log. Without a
+            // corresponding sendRpc reject, the caller has no REPL-side
+            // timeout, so silence here means an indefinite hang. Logging
+            // gives the operator a signal without rate-limiting complexity
+            // (a runaway malformed stream gets capped by the 200-char preview).
+            const preview = line.length > 200 ? `${line.slice(0, 200)}…` : line
+            process.stderr.write(
+                `[nushell-mcp] dispatchLine: discarded malformed line (${err}): ${preview}\n`,
+            )
             return
         }
         if (msg.kind === "notification") return // server notifications ignored

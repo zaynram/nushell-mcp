@@ -43,6 +43,9 @@ function renderExec(result: PipelineResult, timeoutMs: number): string {
     if (result.resultType && result.resultType !== "nothing") {
         parts.push(`\n[result type: ${result.resultType}]`)
     }
+    if (result.bashRunner) {
+        parts.push(`\n[bashEnv runner: ${result.bashRunner}]`)
+    }
     if (result.timedOut) {
         parts.push(`\n[timed out after ${timeoutMs}ms — process killed]`)
     } else if (result.exitCode === null) {
@@ -151,6 +154,14 @@ server.registerTool(
                 .string()
                 .nullable()
                 .describe('`describe` type, e.g. "table<a: int>".'),
+            bashRunner: z
+                .string()
+                .optional()
+                .describe(
+                    'Label of the bash runner used for `bashEnv` (e.g. "wsl", ' +
+                    '"git-bash", "bash", "bash (override)"). Absent when no ' +
+                    '`bashEnv` was provided.',
+                ),
         },
         annotations: {
             readOnlyHint: false,
@@ -191,6 +202,7 @@ server.registerTool(
                     timedOut: result.timedOut,
                     nuon: result.nuon,
                     resultType: result.resultType,
+                    bashRunner: result.bashRunner,
                 },
                 isError: result.timedOut || result.exitCode !== 0,
             }

@@ -83,6 +83,12 @@ export interface PipelineResult extends RawResult {
      * size: filesize>`. Tells the model the shape of the data at a glance.
      */
     resultType: string | null
+    /**
+     * Label of the bash runner used for `bashEnv` (e.g. `"wsl"`,
+     * `"git-bash"`, `"bash"`, `"bash (override)"`). `undefined` when no
+     * `bashEnv` was provided for this call.
+     */
+    bashRunner?: string
 }
 
 /** Spawn `nu` with the given argv, collecting stdout/stderr under a timeout. */
@@ -255,6 +261,13 @@ async function detectBashRunner(): Promise<BashRunner | null> {
         if (await probeRunner(argv)) {
             return { argv, label: isWsl ? "wsl (override)" : "bash (override)" }
         }
+        // The user explicitly opted in to this path — don't silently fall
+        // through to auto-detection. A misconfigured override should be
+        // loud, not hidden behind a working fallback runner.
+        throw new Error(
+            `NUSHELL_MCP_BASH_PATH=${override} did not pass probe — runner unusable. ` +
+            `Unset the env var to fall back to auto-detection (WSL → Git Bash → bash).`,
+        )
     }
 
     const wsl = Bun.which("wsl.exe") ?? "C:\\Windows\\System32\\wsl.exe"
@@ -281,6 +294,16 @@ async function detectBashRunner(): Promise<BashRunner | null> {
 function getBashRunner(): Promise<BashRunner | null> {
     if (!bashRunnerProbe) bashRunnerProbe = detectBashRunner()
     return bashRunnerProbe
+}
+
+/**
+ * Test-only: clear the memoized bash-runner probe so the next call to
+ * `getBashRunner()` re-runs detection with the current environment.
+ * Underscore prefix flags this as outside the stable surface — only
+ * tests should call it.
+ */
+export function _resetBashRunnerProbe(): void {
+    bashRunnerProbe = null
 }
 
 // Bash- and shell-internal variables that we strip even when they appear to
@@ -549,11 +572,13 @@ export async function runPipeline(
 
     // --- Bash bridge ------------------------------------------------------
     let bridgeEnv: Record<string, string> = {}
+    let bashRunner: string | undefined
     if (opts.bashEnv !== undefined && opts.bashEnv.length > 0) {
         const result = await loadBashEnv(opts.bashEnv, {
             timeoutMs: opts.timeoutMs,
         })
         bridgeEnv = result.vars
+        bashRunner = result.runner
     }
 
     // --- Compose & write script ------------------------------------------
@@ -595,6 +620,7 @@ export async function runPipeline(
             ...raw,
             nuon: nuon?.replace(/\s+$/, "") ?? null,
             resultType: resultType?.trim() ?? null,
+            bashRunner,
         }
     } finally {
         await Promise.allSettled([

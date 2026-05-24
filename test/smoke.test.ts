@@ -10,6 +10,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import {
+    _resetBashRunnerProbe,
     getCommandDoc,
     getNuVersion,
     killAll,
@@ -357,6 +358,78 @@ describe("second-pass audit", () => {
         if (limited.kind !== "commands") throw new Error("unreachable")
         expect(limited.commands.length).toBeLessThanOrEqual(3)
     })
+})
+
+describe("cycle 2 audit regressions", () => {
+    // FIX C1: NUSHELL_MCP_BASH_PATH override must hard-error rather than
+    // silently falling through to auto-detection when the probe fails.
+    test(
+        "NUSHELL_MCP_BASH_PATH to nonexistent path throws instead of falling through",
+        async () => {
+            const prevOverride = process.env.NUSHELL_MCP_BASH_PATH
+            // Reset memo so the fresh env-var value is probed, not a cached result.
+            _resetBashRunnerProbe()
+            process.env.NUSHELL_MCP_BASH_PATH =
+                "/nonexistent/path/that/does/not/exist/bash"
+            try {
+                await expect(
+                    loadBashEnv("export CYCLE2_C1_TEST=should-not-run"),
+                ).rejects.toThrow(/NUSHELL_MCP_BASH_PATH=.*did not pass probe/)
+            } finally {
+                // Restore env and reset memo so downstream tests are unaffected.
+                if (prevOverride === undefined) {
+                    delete process.env.NUSHELL_MCP_BASH_PATH
+                } else {
+                    process.env.NUSHELL_MCP_BASH_PATH = prevOverride
+                }
+                _resetBashRunnerProbe()
+            }
+        },
+        10_000,
+    )
+
+    // FIX C2: loadBashEnv returns the runner label, and runPipeline propagates
+    // it in PipelineResult.bashRunner so callers can see which runtime was used.
+    test(
+        "loadBashEnv result includes runner label",
+        async () => {
+            if (!(await bashRuntimeAvailable())) {
+                console.warn("skipping bashRunner label test — no bash runtime detected")
+                return
+            }
+            const result = await loadBashEnv("export CYCLE2_C2_TEST=runner-label")
+            expect(result.runner.length).toBeGreaterThan(0)
+            expect(result.vars.CYCLE2_C2_TEST).toBe("runner-label")
+        },
+        20_000,
+    )
+
+    test(
+        "runPipeline populates PipelineResult.bashRunner when bashEnv is used",
+        async () => {
+            if (!(await bashRuntimeAvailable())) {
+                console.warn("skipping bashRunner field test — no bash runtime detected")
+                return
+            }
+            const r = await runPipeline(
+                "$env.CYCLE2_RUNNER_VAR? | default 'missing'",
+                { bashEnv: "export CYCLE2_RUNNER_VAR=present" },
+            )
+            expect(r.exitCode).toBe(0)
+            expect(r.bashRunner).toBeDefined()
+            expect((r.bashRunner ?? "").length).toBeGreaterThan(0)
+        },
+        20_000,
+    )
+
+    test(
+        "runPipeline leaves PipelineResult.bashRunner undefined when no bashEnv",
+        async () => {
+            const r = await runPipeline("1 + 1")
+            expect(r.exitCode).toBe(0)
+            expect(r.bashRunner).toBeUndefined()
+        },
+    )
 })
 
 describe("MCP server wiring", () => {
