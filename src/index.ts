@@ -712,7 +712,7 @@ server.registerTool(
 server.registerTool(
     "nu_exec_abort",
     {
-        title: "Abort all in-flight nu_run / nu_exec calls",
+        title: "Abort all in-flight nu_exec calls",
         description:
             "Kill every active one-shot exec subprocess. Leaves REPL " +
             "buckets and the doc singleton untouched — use `nu_repl_kill` " +
