@@ -194,3 +194,46 @@ describe("getNuMcpClient — Cycle 5: killAll integration", () => {
         expect(killed).toBe(0)
     })
 })
+
+describe("NuMcpChild — onExit listener-error isolation", () => {
+    test("one throwing listener does not prevent subsequent listeners from firing", async () => {
+        const child = new NuMcpChild()
+        let called2 = false
+        let called3 = false
+
+        child.onExit(() => {
+            throw new Error("listener-1 boom")
+        })
+        child.onExit(() => {
+            called2 = true
+        })
+        child.onExit(() => {
+            called3 = true
+        })
+
+        // kill() calls fireExit() unconditionally even when proc is null —
+        // we never called startup so proc remains null.
+        child.kill()
+
+        expect(called2).toBe(true)
+        expect(called3).toBe(true)
+    })
+
+    test("onExit registered after exit fires via queueMicrotask", async () => {
+        const child = new NuMcpChild()
+
+        // Kill first — fireExit marks child.exited = true.
+        child.kill()
+
+        let called4 = false
+        child.onExit(() => {
+            called4 = true
+        })
+
+        // The callback was scheduled via queueMicrotask; flush the microtask
+        // queue before asserting.
+        await new Promise<void>((r) => queueMicrotask(r))
+
+        expect(called4).toBe(true)
+    })
+})

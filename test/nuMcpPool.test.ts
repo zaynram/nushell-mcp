@@ -453,6 +453,96 @@ describe("NuMcpPool — status() probeError surfacing", () => {
     })
 })
 
+describe("NuMcpPool — crash mid-call", () => {
+    test("pending call rejects when child dies mid-flight and bucket is pruned", async () => {
+        const p = new NuMcpPool({ maxRepls: 2 })
+        try {
+            p.spawn("victim")
+            // Warm the bucket so the child process is actually alive.
+            await p.call("victim", "evaluate", { input: "1" })
+            expect(p.has("victim")).toBe(true)
+
+            // Start a long-running call WITHOUT awaiting.
+            const callPromise = p.call("victim", "evaluate", { input: "sleep 5sec" })
+
+            // Give the call's sendRpc time to register on the pending map
+            // before we kill the child.
+            await new Promise((r) => setImmediate(r))
+
+            // Reach in and kill the bucket's child directly.
+            p.get("victim")!.kill()
+
+            // The in-flight call must reject because handleExit/kill rejects
+            // all pending handlers.
+            await expect(callPromise).rejects.toThrow(/child exited|killed/i)
+
+            // The onExit listener registered by spawn() prunes the bucket.
+            // Give the microtask / exit-handler a moment to fire.
+            await new Promise((r) => setTimeout(r, 50))
+            expect(p.has("victim")).toBe(false)
+
+            // Respawn with the same key must work — slot is free.
+            expect(() => p.spawn("victim")).not.toThrow()
+        } finally {
+            p.nukeAll()
+        }
+    })
+})
+
+describe("NuMcpPool — env-var cap (NUSHELL_MCP_MAX_REPLS=3)", () => {
+    test("3 spawns succeed; 4th throws capacity error matching limit", () => {
+        const original = process.env.NUSHELL_MCP_MAX_REPLS
+        process.env.NUSHELL_MCP_MAX_REPLS = "3"
+        let p: NuMcpPool | null = null
+        try {
+            p = new NuMcpPool() // no explicit option — reads from env
+            p.spawn("cap1")
+            p.spawn("cap2")
+            p.spawn("cap3")
+            expect(p.list().sort()).toEqual(["cap1", "cap2", "cap3"])
+            expect(() => p!.spawn("cap4")).toThrow(/maximum active repls reached.*3/i)
+        } finally {
+            p?.nukeAll()
+            if (original === undefined) delete process.env.NUSHELL_MCP_MAX_REPLS
+            else process.env.NUSHELL_MCP_MAX_REPLS = original
+        }
+    })
+
+    test("env var '0' falls back to DEFAULT_MAX_REPLS (10)", () => {
+        const original = process.env.NUSHELL_MCP_MAX_REPLS
+        process.env.NUSHELL_MCP_MAX_REPLS = "0"
+        let p: NuMcpPool | null = null
+        try {
+            p = new NuMcpPool()
+            // Spawn 10 — should all succeed at the default cap.
+            for (let i = 0; i < 10; i++) p.spawn(`z${i}`)
+            expect(p.list().length).toBe(10)
+            // 11th should fail.
+            expect(() => p!.spawn("z10")).toThrow(/capacity|max/i)
+        } finally {
+            p?.nukeAll()
+            if (original === undefined) delete process.env.NUSHELL_MCP_MAX_REPLS
+            else process.env.NUSHELL_MCP_MAX_REPLS = original
+        }
+    })
+
+    test("env var garbage (non-numeric) falls back to DEFAULT_MAX_REPLS (10)", () => {
+        const original = process.env.NUSHELL_MCP_MAX_REPLS
+        process.env.NUSHELL_MCP_MAX_REPLS = "not-a-number"
+        let p: NuMcpPool | null = null
+        try {
+            p = new NuMcpPool()
+            for (let i = 0; i < 10; i++) p.spawn(`g${i}`)
+            expect(p.list().length).toBe(10)
+            expect(() => p!.spawn("g10")).toThrow(/capacity|max/i)
+        } finally {
+            p?.nukeAll()
+            if (original === undefined) delete process.env.NUSHELL_MCP_MAX_REPLS
+            else process.env.NUSHELL_MCP_MAX_REPLS = original
+        }
+    })
+})
+
 describe("parseEvaluateEnvelope — pure helper", () => {
     test("extracts cwd, history_index, timestamp from a canonical envelope", () => {
         const text = `{cwd:/home/ramda/code/nushell-mcp,history_index:5,timestamp:2026-05-23T19:29:15.835595276+00:00,output:"42"}`
