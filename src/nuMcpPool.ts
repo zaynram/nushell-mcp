@@ -60,12 +60,21 @@ export interface BucketStatus extends EvaluateEnvelope {
  * (`+00:00` with 9 fractional digits) does not round-trip through `Date`.
  */
 export function parseEvaluateEnvelope(text: string): EvaluateEnvelope {
-  const parseNuonField = (field: string): string | undefined =>
-    new RegExp(`(?:^|[,{\\s])${field}:\\s*([^,}\\s]+)`).exec(text)?.at(1)
+  // Match field preceded by start-of-string, `{`, or `,` (with optional
+  // surrounding whitespace). Value terminates at the next `,` or `}`.
+  // Whitespace around the value is trimmed so cwd paths with internal
+  // spaces (e.g. `/home/user/My Documents`) are captured in full.
+  // NOTE: commas cannot appear in cwd values — the wire format would break.
+  const parseNuonField = (field: string): string | undefined => {
+    const m = new RegExp(
+      `(?:^|[,{])\\s*${field}:\\s*([^,}]+?)\\s*(?=[,}])`,
+    ).exec(text)
+    return m?.[1]
+  }
 
   const cwd = parseNuonField("cwd")
   if (!cwd) return {}
-  const env: EvaluateEnvelope = { cwd: cwd.trim() }
+  const env: EvaluateEnvelope = { cwd }
   const hist = parseNuonField("history_index")
   if (hist) {
     const n = Number.parseInt(hist, 10)
@@ -147,12 +156,18 @@ export class NuMcpPool {
    *
    * The mutex is released in `finally` so a thrown / rejected callTool can't
    * leak the lock and wedge the bucket.
+   *
+   * Returns both the raw `response` and a snapshot of the `envelope` taken
+   * while still holding the mutex. Callers that need the post-call envelope
+   * (e.g. `nu_repl_write`) must use this snapshot rather than calling
+   * `pool.envelope(key)` separately — the bucket may have been pruned by the
+   * time a separate `envelope()` call runs (BUG 2 fix).
    */
   async call(
     key: string,
     toolName: string,
     args: object,
-  ): Promise<NuMcpToolResponse> {
+  ): Promise<{ response: NuMcpToolResponse; envelope: EvaluateEnvelope }> {
     const entry = this.buckets.get(key)
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
     const release = await entry.mutex.acquire()
@@ -168,7 +183,11 @@ export class NuMcpPool {
         const parsed = parseEvaluateEnvelope(response.text)
         entry.envelope = { ...entry.envelope, ...parsed }
       }
-      return response
+      // Snapshot the envelope while still holding the mutex so the caller
+      // gets an atomic {response, envelope} pair even if the child dies after
+      // the mutex is released.
+      const envelope = { ...entry.envelope }
+      return { response, envelope }
     } finally {
       release()
     }
@@ -215,6 +234,13 @@ export class NuMcpPool {
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
     const release = await entry.mutex.acquire()
     try {
+      // Re-check that this entry is still the current one. A concurrent
+      // clear("all") on the same key could have already killed this entry
+      // and spawned a replacement while we waited for the mutex.
+      if (this.buckets.get(key) !== entry) {
+        // Work already satisfied by the concurrent caller — nothing to do.
+        return
+      }
       if (mode === "buffer") {
         entry.buffer.length = 0
         return
@@ -242,10 +268,12 @@ export class NuMcpPool {
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
     let envKeys: string[] = []
     let probeError: string | undefined
+    let afterEnvelope: EvaluateEnvelope = {}
     try {
-      const probe = await this.call(key, "evaluate", {
+      const { response: probe, envelope } = await this.call(key, "evaluate", {
         input: "$env | columns",
       })
+      afterEnvelope = envelope
       // `$env | columns` returns a list rendered as `output:"[KEY1,KEY2,...]"`.
       const match = probe.text.match(/output:"\[([^\]]*)\]"/)
       if (match?.[1]) {
@@ -257,23 +285,36 @@ export class NuMcpPool {
     } catch (err) {
       // Side-channel probe failed — surface as probeError rather than throwing.
       probeError = err instanceof Error ? err.message : String(err)
+      // Fall back to the cached envelope from before the failed probe.
+      afterEnvelope = this.buckets.get(key)?.envelope ?? {}
     }
     // Return the post-probe envelope; the probe both increments
     // history_index and is the freshest snapshot of cwd / timestamp.
-    const after = this.buckets.get(key)?.envelope ?? {}
-    return { ...after, envKeys, ...(probeError !== undefined && { probeError }) }
+    return { ...afterEnvelope, envKeys, ...(probeError !== undefined && { probeError }) }
   }
 
   /**
    * Kill and unregister a bucket. Returns true if it existed, false otherwise
-   * (idempotent — safe to call on a missing key).
+   * (idempotent — safe to call on a missing key). Acquires the bucket's
+   * mutex before killing so concurrent clear("all") calls cannot resurrect
+   * the bucket after kill() has deleted it.
    */
-  kill(key: string): boolean {
+  async kill(key: string): Promise<boolean> {
     const entry = this.buckets.get(key)
     if (!entry) return false
-    entry.child.kill()
-    this.buckets.delete(key)
-    return true
+    const release = await entry.mutex.acquire()
+    try {
+      // Refetch after acquiring the mutex. A concurrent clear("all") may
+      // have already replaced this entry under the same key — in that case
+      // we want to destroy whatever is current, not the stale pre-lock entry.
+      const current = this.buckets.get(key)
+      if (!current) return false
+      current.child.kill()
+      this.buckets.delete(key)
+      return true
+    } finally {
+      release()
+    }
   }
 
   /** Kill every bucket; returns the count killed. */

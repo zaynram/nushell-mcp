@@ -456,7 +456,7 @@ server.registerTool(
         },
     },
     async ({ key }) => {
-        const killed = getReplPool().kill(key)
+        const killed = await getReplPool().kill(key)
         if (!killed) {
             return {
                 content: [
@@ -511,14 +511,16 @@ server.registerTool(
     async ({ key, input }) => {
         const pool = getReplPool()
         try {
-            const response = await pool.call(key, "evaluate", { input })
-            const env = pool.envelope(key)
+            // Destructure atomically: the envelope snapshot is taken while the
+            // mutex is still held, so the bucket dying after the call cannot
+            // cause a separate pool.envelope(key) lookup to throw (BUG 2 fix).
+            const { response, envelope } = await pool.call(key, "evaluate", { input })
             return {
                 content: [{ type: "text", text: response.text }],
                 structuredContent: {
                     key,
                     output: response.text,
-                    ...env,
+                    ...envelope,
                 },
                 isError: response.isError,
             }

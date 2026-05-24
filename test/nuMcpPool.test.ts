@@ -42,17 +42,17 @@ describe("NuMcpPool — basic spawn / has / list / kill", () => {
         expect(() => pool.spawn("alpha")).toThrow(/already exists|already spawned/i)
     })
 
-    test("kill() removes the bucket from the map", () => {
+    test("kill() removes the bucket from the map", async () => {
         pool.spawn("beta")
         expect(pool.has("beta")).toBe(true)
-        const killed = pool.kill("beta")
+        const killed = await pool.kill("beta")
         expect(killed).toBe(true)
         expect(pool.has("beta")).toBe(false)
         expect(pool.list()).not.toContain("beta")
     })
 
-    test("kill() on a missing bucket returns false (idempotent)", () => {
-        expect(pool.kill("nonexistent-key")).toBe(false)
+    test("kill() on a missing bucket returns false (idempotent)", async () => {
+        expect(await pool.kill("nonexistent-key")).toBe(false)
     })
 
     test("nukeAll empties the pool and returns the count killed", () => {
@@ -107,12 +107,12 @@ describe("NuMcpPool — capacity check (MAX_REPLS)", () => {
         }
     })
 
-    test("after kill, a new spawn fits under the cap", () => {
+    test("after kill, a new spawn fits under the cap", async () => {
         const p = new NuMcpPool({ maxRepls: 2 })
         try {
             p.spawn("k1")
             p.spawn("k2")
-            p.kill("k1")
+            await p.kill("k1")
             // Should now succeed — slot freed
             p.spawn("k3")
             expect(p.list().sort()).toEqual(["k2", "k3"])
@@ -171,7 +171,7 @@ describe("NuMcpPool — Cycle 4: per-bucket serialization in pool.call", () => {
         const p = new NuMcpPool({ maxRepls: 2 })
         try {
             p.spawn("solo")
-            const r = await p.call("solo", "evaluate", { input: "1 + 1" })
+            const { response: r } = await p.call("solo", "evaluate", { input: "1 + 1" })
             expect(r.isError).toBe(false)
             expect(r.text).toContain("output:\"2\"")
         } finally {
@@ -242,10 +242,10 @@ describe("NuMcpPool — Cycle 4: per-bucket serialization in pool.call", () => {
         const p = new NuMcpPool({ maxRepls: 1 })
         try {
             p.spawn("buf")
-            const a = await p.call("buf", "evaluate", { input: "1 + 1" })
+            const { response: a } = await p.call("buf", "evaluate", { input: "1 + 1" })
             const head1 = p.lastResponse("buf")
             expect(head1).toEqual(a)
-            const b = await p.call("buf", "evaluate", { input: "2 + 2" })
+            const { response: b } = await p.call("buf", "evaluate", { input: "2 + 2" })
             const head2 = p.lastResponse("buf")
             expect(head2).toEqual(b)
             expect(head2).not.toEqual(head1)
@@ -267,7 +267,7 @@ describe("NuMcpPool — Cycle 4: per-bucket serialization in pool.call", () => {
             ).rejects.toThrow()
 
             // If mutex leaked, this hangs forever; bun test will time out.
-            const r = await p.call("rej", "evaluate", { input: "42" })
+            const { response: r } = await p.call("rej", "evaluate", { input: "42" })
             expect(r.isError).toBe(false)
             expect(r.text).toContain("42")
         } finally {
@@ -329,7 +329,7 @@ describe("NuMcpPool — Cycle 5: ring buffer + envelope cache", () => {
             p.clearBuffer("clr")
             expect(p.lastResponse("clr")).toBeNull()
             // Child still works — clearBuffer is buffer-only.
-            const r = await p.call("clr", "evaluate", { input: "2" })
+            const { response: r } = await p.call("clr", "evaluate", { input: "2" })
             expect(r.isError).toBe(false)
         } finally {
             p.nukeAll()
@@ -571,5 +571,123 @@ describe("parseEvaluateEnvelope — pure helper", () => {
         expect(env.cwd).toBe("/var/log")
         expect(env.historyIndex).toBeUndefined()
         expect(env.timestamp).toBeUndefined()
+    })
+
+    // BUG 1 regression: cwd paths containing spaces must not be truncated.
+    test("cwd with a single internal space is captured in full", () => {
+        const text = `{cwd:/home/user/My Documents,history_index:1,timestamp:2026-01-01T00:00:00.000000000+00:00,output:"ok"}`
+        const env = parseEvaluateEnvelope(text)
+        expect(env.cwd).toBe("/home/user/My Documents")
+        expect(env.historyIndex).toBe(1)
+    })
+
+    test("cwd with multiple internal spaces is captured in full", () => {
+        const text = `{cwd:/home/user/path with many spaces,history_index:2,timestamp:2026-01-01T00:00:00.000000000+00:00,output:"ok"}`
+        const env = parseEvaluateEnvelope(text)
+        expect(env.cwd).toBe("/home/user/path with many spaces")
+        expect(env.historyIndex).toBe(2)
+    })
+
+    test("cwd appears at the start of the envelope (no preceding comma)", () => {
+        const text = `{cwd:/tmp/spaced path,output:"x"}`
+        const env = parseEvaluateEnvelope(text)
+        expect(env.cwd).toBe("/tmp/spaced path")
+    })
+
+    test("cwd appears at the end of the envelope (last field before closing brace)", () => {
+        const text = `{output:"x",history_index:3,cwd:/end spaced path}`
+        const env = parseEvaluateEnvelope(text)
+        expect(env.cwd).toBe("/end spaced path")
+        expect(env.historyIndex).toBe(3)
+    })
+})
+
+describe("NuMcpPool — BUG 3 regression: concurrent clear(key, 'all') must not throw", () => {
+    test("two concurrent clear(key, 'all') calls both resolve without error", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        try {
+            p.spawn("concurrent-clear")
+            // Both callers race to clear the same key. Only one should
+            // do the kill+spawn work; the second should silently succeed.
+            await expect(
+                Promise.all([
+                    p.clear("concurrent-clear", "all"),
+                    p.clear("concurrent-clear", "all"),
+                ]),
+            ).resolves.toEqual([undefined, undefined])
+            // Bucket must still exist (one clear won and respawned).
+            expect(p.has("concurrent-clear")).toBe(true)
+            // Pool has exactly one bucket registered under this key.
+            expect(p.list().filter((k) => k === "concurrent-clear").length).toBe(1)
+        } finally {
+            p.nukeAll()
+        }
+    })
+})
+
+describe("NuMcpPool — BUG 4 regression: concurrent kill and clear must not resurrect bucket", () => {
+    test("kill() wins over concurrent clear('all') — bucket is gone after both settle", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        try {
+            p.spawn("race-kill-clear")
+            // Fire both concurrently. kill() should acquire the mutex and
+            // destroy the bucket; clear()'s spawn attempt must not revive it.
+            await Promise.all([
+                p.clear("race-kill-clear", "all"),
+                p.kill("race-kill-clear"),
+            ])
+            // After both settle, the bucket must be gone (kill wins).
+            expect(p.has("race-kill-clear")).toBe(false)
+        } finally {
+            p.nukeAll()
+        }
+    })
+
+    test("kill() on a missing key returns false asynchronously", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        expect(await p.kill("never-existed")).toBe(false)
+    })
+})
+
+describe("NuMcpPool — BUG 2 regression: call() returns atomic {response, envelope} snapshot", () => {
+    test("call() returns envelope snapshot co-located with the response", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        try {
+            p.spawn("atomic-env")
+            await p.call("atomic-env", "evaluate", { input: "cd /tmp" })
+            // The second call's envelope should reflect cwd=/tmp set above.
+            const { response, envelope } = await p.call("atomic-env", "evaluate", {
+                input: "1 + 1",
+            })
+            expect(response.isError).toBe(false)
+            expect(response.text).toContain("output:\"2\"")
+            // Envelope must carry the cwd that was set before this call.
+            expect(envelope.cwd).toBeDefined()
+            expect(typeof envelope.historyIndex).toBe("number")
+        } finally {
+            p.nukeAll()
+        }
+    })
+
+    test("call() envelope snapshot survives bucket pruning after the call", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        try {
+            p.spawn("pruned-env")
+            // Establish a cwd in the session.
+            await p.call("pruned-env", "evaluate", { input: "cd /tmp" })
+            // Start the call and capture the return atomically.
+            const callPromise = p.call("pruned-env", "evaluate", { input: "1" })
+            // The result must be available regardless of what happens next.
+            const { response, envelope } = await callPromise
+            // Immediately kill the bucket so it is pruned from the map.
+            await p.kill("pruned-env")
+            // The envelope snapshot from call() must still be accessible —
+            // it was captured inside the mutex, so no separate lookup is needed.
+            expect(p.has("pruned-env")).toBe(false)
+            expect(response.isError).toBe(false)
+            expect(envelope.cwd).toBeDefined()
+        } finally {
+            p.nukeAll()
+        }
     })
 })
