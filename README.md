@@ -30,7 +30,7 @@ Twelve tools, grouped by purpose.
 | Tool | Purpose |
 |------|---------|
 | `nu_doc_search` | Search installed commands by name, description, and search terms. |
-| `nu_doc_help` | Full help for one command — text *and* structured metadata; suggests near matches on a miss. |
+| `nu_doc_help` | Full help for one command; returns `found` plus `help`, and includes `suggestions` on a miss. |
 
 ### REPL buckets (persistent)
 
