@@ -6,10 +6,12 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import {
     _getActiveRoles,
+    abortExec,
     killAll,
     runRaw,
     sanitizeKey,
 } from "../src/nu.js"
+import { active, addActive } from "../src/active.js"
 import { NuMcpChild } from "../src/nuMcpClient.js"
 import { NuMcpPool } from "../src/nuMcpPool.js"
 
@@ -126,4 +128,48 @@ describe("active set role tagging — NuMcpChild (repl + doc)", () => {
         const roles = _getActiveRoles()
         expect(roles.filter((r) => r === "repl").length).toBe(0)
     })
+})
+
+describe("abortExec — Copilot 3295712499/3295712510: kills bash too", () => {
+    test("abortExec kills both 'exec' and 'bash' procs and leaves 'repl'/'doc' alone", async () => {
+        // Spawn one long-running exec (auto-tagged 'exec') and manually
+        // register a fake bash-tagged proc (the bash-runner code path is
+        // platform-gated and not always reachable in CI; this directly
+        // exercises the role filter that was previously dropping bash).
+        const execPending = runRaw("sleep 30sec", { timeoutMs: 10_000 })
+        await new Promise((r) => setTimeout(r, 100))
+        const fakeBash = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" })
+        addActive(fakeBash, "bash")
+
+        // Park a repl child as a control — abortExec must not touch it.
+        const repl = new NuMcpChild("repl")
+        await repl.callTool("list_commands", { find: "where" })
+
+        const beforeRoles = _getActiveRoles()
+        expect(beforeRoles).toContain("exec")
+        expect(beforeRoles).toContain("bash")
+        expect(beforeRoles).toContain("repl")
+
+        const aborted = abortExec()
+        // At least the exec and the bash proc were killed.
+        expect(aborted).toBeGreaterThanOrEqual(2)
+
+        const afterRoles = _getActiveRoles()
+        expect(afterRoles.includes("exec")).toBe(false)
+        expect(afterRoles.includes("bash")).toBe(false)
+        // Repl untouched.
+        expect(afterRoles).toContain("repl")
+
+        // Cleanup: drain the killed exec promise and tear down the repl.
+        const execResult = await execPending
+        expect(execResult.exitCode).not.toBe(0)
+        repl.kill()
+        // fakeBash was already killed by abortExec; make sure it's reaped.
+        try {
+            fakeBash.kill()
+        } catch {
+            // already dead
+        }
+        active.delete(fakeBash)
+    }, 15_000)
 })

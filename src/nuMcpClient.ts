@@ -264,7 +264,8 @@ export class NuMcpChild {
      *
      * `role` flows to `addActive(proc, role)` inside `startup()`. The tag
      * distinguishes REPL-bucket children (`"repl"`) from the doc singleton
-     * (`"doc"`): `abortExec()` filters on `role === "exec"` only, while
+     * (`"doc"`): `abortExec()` filters on `role === "exec" || role === "bash"`
+     * (so a hung bashEnv runner also dies on user-invoked abort), while
      * `killAll()` reaches every role. Callers must pass an explicit role —
      * there is no default, because silently choosing the wrong tag affects
      * `abortExec`/`killAll` filtering downstream.
@@ -345,7 +346,24 @@ export class NuMcpChild {
         // Wire the exit handler so in-flight pending requests reject rather
         // than hang if the child dies on its own (not via `kill()`).
         void proc.exited.then(() => this.handleExit(proc))
-        await this.handshake()
+        try {
+            await this.handshake()
+        } catch (err) {
+            // Handshake failure leaves the spawned child + active entry
+            // orphaned unless we clean up here. proc.exited may not have
+            // fired yet (process could still be alive on a write error), so
+            // we eagerly kill + remove. handleExit remains idempotent via
+            // its `this.proc !== proc` guard if proc.exited fires later
+            // (Copilot 3295712490).
+            try {
+                proc.kill()
+            } catch {
+                // Already gone — fine.
+            }
+            removeActive(proc)
+            if (this.proc === proc) this.proc = null
+            throw err
+        }
     }
 
     /**

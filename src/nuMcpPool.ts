@@ -194,6 +194,16 @@ export class NuMcpPool {
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
     const release = await entry.mutex.acquire()
     try {
+      // Re-check after acquiring the mutex: a concurrent clear("all") could
+      // have replaced the bucket under the same key while we waited, and a
+      // concurrent kill() could have pruned it entirely. In either case the
+      // captured `entry.child` is now dead and callTool would fail with a
+      // noisy stdio error; the explicit re-check produces a clean message
+      // and preserves "kill/clear wins" semantics for queued callers
+      // (Copilot 3295712482).
+      if (this.buckets.get(key) !== entry) {
+        throw new Error(`bucket "${key}" was replaced or killed while waiting`)
+      }
       const response = await entry.child.callTool(toolName, args)
       // Push to ring buffer head; evict the tail past RING_BUFFER_SIZE.
       entry.buffer.unshift(response)

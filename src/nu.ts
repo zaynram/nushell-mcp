@@ -643,7 +643,13 @@ export async function runPipeline(
 export function abortExec(): number {
     let aborted = 0
     for (const [proc, role] of active) {
-        if (role !== "exec") continue
+        // Kill both "exec" (nu pipelines) and "bash" (bashEnv runner) — a
+        // nu_exec call with a bashEnv snippet can be blocked in the bash
+        // pre-step, and the user invoking nu_exec_abort expects everything
+        // related to in-flight nu_exec to die (Copilot 3295712499 /
+        // 3295712510 — was previously only killing "exec", diverging from
+        // the documented semantics in active.ts).
+        if (role !== "exec" && role !== "bash") continue
         try {
             proc.kill()
         } catch {
