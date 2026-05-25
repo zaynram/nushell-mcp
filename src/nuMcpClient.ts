@@ -279,6 +279,21 @@ export class NuMcpChild {
     }
 
     /**
+     * Test-only accessor for the underlying `Bun.Subprocess`. Underscore
+     * prefix flags this as not part of the stable surface — tests use it to
+     * simulate raw subprocess crashes by calling `.kill()` directly,
+     * bypassing `NuMcpChild.kill()` which would synchronously prune the
+     * bucket from any owning pool. Production consumers should use the
+     * lifecycle methods (`callTool`, `kill`, `onExit`) and treat `proc` as
+     * private (which it is — TypeScript checks block access; this accessor
+     * is the deliberate escape hatch, matching the `_getActiveRoles`
+     * pattern in `active.ts`). Returns `null` before `startup()` runs.
+     */
+    _getProc(): Bun.Subprocess | null {
+        return this.proc
+    }
+
+    /**
      * Subscribe to this child's terminal exit. The callback fires exactly once
      * — on the first of `kill()` or unexpected child death. If the child has
      * already exited when `onExit` is called, the callback fires on the next
@@ -438,13 +453,26 @@ export class NuMcpChild {
             // explicit debug env var below.
             const errorClass = err instanceof Error ? err.constructor.name : "non-Error"
             process.stderr.write(
-                `[nushell-mcp] dispatchLine: discarded malformed line (length=${line.length}, role=${this.role}, error=${errorClass})\n`,
+                `[nushell-mcp] dispatchLine: malformed line treated as fatal (length=${line.length}, role=${this.role}, error=${errorClass})\n`,
             )
             if (process.env.NUSHELL_MCP_DEBUG_DISPATCH === "1") {
                 const preview = line.slice(0, 200).replace(/[^\x20-\x7E]/g, ".")
                 const detail = err instanceof Error ? err.message : String(err)
                 process.stderr.write(`[nushell-mcp] dispatchLine debug: ${detail}\n`)
                 process.stderr.write(`[nushell-mcp] dispatchLine preview: ${preview}\n`)
+            }
+            // The `nu --mcp` stdio channel is JSON-RPC only; any non-decodable
+            // line is a protocol violation, and if the bad line was actually a
+            // response, the caller's `sendRpc` would hang forever waiting for
+            // it. Kill the child so handleExit rejects all pending requests
+            // with "nu --mcp child exited" — mirrors the runStdoutReader catch
+            // block above (Copilot 3295803635).
+            if (this.proc) {
+                try {
+                    this.proc.kill()
+                } catch {
+                    // Already gone — fine.
+                }
             }
             return
         }

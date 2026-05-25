@@ -464,12 +464,16 @@ describe("NuMcpPool — status() probeError surfacing", () => {
         const p = new NuMcpPool({ maxRepls: 1 })
         try {
             const child = p.spawn("probe-err")
-            // Trigger lazy spawn so child.proc is populated.
+            // Trigger lazy spawn so the underlying proc is populated.
             await p.call("probe-err", "evaluate", { input: "1" })
             // Kill the raw Bun subprocess directly — NOT child.kill(), which
             // would synchronously prune the bucket and make status() throw
-            // "does not exist" before the probe even starts.
-            child.proc!.kill()
+            // "does not exist" before the probe even starts. Reaching the
+            // raw proc goes through the _getProc test-only accessor since
+            // the field itself is private (Copilot 3295803625).
+            const rawProc = child._getProc()
+            if (!rawProc) throw new Error("expected proc to be spawned by p.call")
+            rawProc.kill()
             // status() sees the bucket entry still alive (onExit fires async)
             // but the probe evaluate call will fail because the child is dead.
             const result = await p.status("probe-err")
