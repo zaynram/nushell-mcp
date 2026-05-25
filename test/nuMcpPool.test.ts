@@ -492,6 +492,29 @@ describe("NuMcpPool — status() probeError surfacing", () => {
     })
 })
 
+describe("NuMcpPool — Copilot 3296946827: status() probe does not record into ring buffer", () => {
+    test("nu_repl_status's $env|columns probe leaves nu_repl_read pointing at the user's last write", async () => {
+        const p = new NuMcpPool({ maxRepls: 1 })
+        try {
+            p.spawn("rec")
+            // First, a normal user write — this SHOULD be recorded.
+            await p.call("rec", "evaluate", { input: "42" })
+            const headBeforeStatus = p.lastResponse("rec")
+            expect(headBeforeStatus).not.toBeNull()
+            if (!headBeforeStatus) throw new Error("unreachable")
+            // Now call status — its internal probe must not displace the user's
+            // last recorded response.
+            const stat = await p.status("rec")
+            expect(stat.kind).toBe("ok")
+            const headAfterStatus = p.lastResponse("rec")
+            // Same response object reference: status's probe was not pushed.
+            expect(headAfterStatus).toBe(headBeforeStatus)
+        } finally {
+            p.nukeAll()
+        }
+    })
+})
+
 describe("NuMcpPool — crash mid-call", () => {
     test("pending call rejects when child dies mid-flight and bucket is pruned", async () => {
         const p = new NuMcpPool({ maxRepls: 2 })

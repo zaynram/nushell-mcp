@@ -184,11 +184,19 @@ export class NuMcpPool {
    * `pool.envelope(key)` separately — the bucket may have been pruned by the
    * time a separate `envelope()` call runs (a separate lookup would then
    * throw "bucket does not exist" even though the call itself succeeded).
+   *
+   * `opts.record` (default `true`) controls whether the response is pushed
+   * into the bucket's ring buffer. Internal probe calls (e.g. `status()`'s
+   * `$env | columns` probe) pass `false` so `nu_repl_read` keeps returning
+   * the user's most-recent `nu_repl_write` response rather than the
+   * server-injected probe (Copilot 3296946827). The envelope cache is
+   * updated regardless — that's the whole point of the probe.
    */
   async call(
     key: string,
     toolName: string,
     args: object,
+    opts?: { record?: boolean },
   ): Promise<{ response: NuMcpToolResponse; envelope: EvaluateEnvelope }> {
     const entry = this.buckets.get(key)
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
@@ -205,10 +213,13 @@ export class NuMcpPool {
         throw new Error(`bucket "${key}" was replaced or killed while waiting`)
       }
       const response = await entry.child.callTool(toolName, args)
-      // Push to ring buffer head; evict the tail past RING_BUFFER_SIZE.
-      entry.buffer.unshift(response)
-      if (entry.buffer.length > RING_BUFFER_SIZE) {
-        entry.buffer.length = RING_BUFFER_SIZE
+      const record = opts?.record !== false
+      if (record) {
+        // Push to ring buffer head; evict the tail past RING_BUFFER_SIZE.
+        entry.buffer.unshift(response)
+        if (entry.buffer.length > RING_BUFFER_SIZE) {
+          entry.buffer.length = RING_BUFFER_SIZE
+        }
       }
       // Update envelope cache only when fields are present (e.g. `evaluate`).
       // A `{kind: "empty"}` parse leaves the cache untouched (non-envelope
@@ -328,9 +339,12 @@ export class NuMcpPool {
     const entry = this.buckets.get(key)
     if (!entry) throw new Error(`bucket "${key}" does not exist`)
     try {
-      const { response: probe, envelope } = await this.call(key, "evaluate", {
-        input: "$env | columns",
-      })
+      const { response: probe, envelope } = await this.call(
+        key,
+        "evaluate",
+        { input: "$env | columns" },
+        { record: false },
+      )
       if (probe.isError) {
         // Probe call succeeded at the transport level but upstream tool
         // reported an error — surface as probe-error so callers see the

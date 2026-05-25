@@ -682,7 +682,11 @@ export function killAll(): number {
         } catch {
             // Already gone — fine.
         }
-        active.delete(proc)
+        // Route through removeActive — `active.ts` is the single mutator of
+        // the role-tagged registry, and this loop ran an inline
+        // `active.delete(proc)` that drifted away from that invariant
+        // (Copilot 3296946777).
+        removeActive(proc)
         killed++
     }
     return killed

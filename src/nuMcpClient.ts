@@ -413,7 +413,7 @@ export class NuMcpChild {
                 while ((nl = buf.indexOf("\n")) !== -1) {
                     const line = buf.slice(0, nl)
                     buf = buf.slice(nl + 1)
-                    if (line.trim()) this.dispatchLine(line)
+                    if (line.trim()) this.dispatchLine(proc, line)
                 }
             }
         } catch (err) {
@@ -434,7 +434,7 @@ export class NuMcpChild {
         }
     }
 
-    private dispatchLine(line: string): void {
+    private dispatchLine(proc: Bun.Subprocess, line: string): void {
         let msg: DecodedMessage
         try {
             msg = decodeMessage(line)
@@ -467,9 +467,16 @@ export class NuMcpChild {
             // it. Kill the child so handleExit rejects all pending requests
             // with "nu --mcp child exited" — mirrors the runStdoutReader catch
             // block above (Copilot 3295803635).
-            if (this.proc) {
+            //
+            // Only kill if the bad line came from the CURRENTLY-active proc.
+            // Restart-on-death means an old stdout reader can still be
+            // draining a dead proc's buffered output while this.proc already
+            // points at a newly-spawned replacement; without the identity
+            // check, a malformed line from the dead proc would incorrectly
+            // kill the healthy new one (Copilot 3296946856).
+            if (this.proc === proc) {
                 try {
-                    this.proc.kill()
+                    proc.kill()
                 } catch {
                     // Already gone — fine.
                 }
