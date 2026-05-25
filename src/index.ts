@@ -234,16 +234,17 @@ server.registerTool(
         description:
             "Search every command available in this `nu` (native + plugins + " +
             "aliases + custom defs) by substring against name/description/" +
-            'search-terms. Omit `query` to receive usage help. Pass `"*"` to ' +
-            "list everything (sliced by `limit`). Follow up with " +
-            "`nu_doc_help` for full help on a specific command.",
+            "search-terms. Omit `query` (or pass an empty string) to receive " +
+            'usage help. Pass `"*"` to list everything (sliced by `limit`). ' +
+            "Follow up with `nu_doc_help` for full help on a specific command.",
         inputSchema: {
             query: z
                 .string()
                 .optional()
                 .describe(
-                    'Substring to match. Omit for usage help. Pass "*" for ' +
-                        'all commands. e.g. "parse json", "split", "where".',
+                    "Substring to match. Omit or pass an empty string for " +
+                        'usage help. Pass "*" for all commands. ' +
+                        'e.g. "parse json", "split", "where".',
                 ),
             limit: z
                 .number()
@@ -830,9 +831,10 @@ server.registerTool(
     {
         title: "Abort all in-flight nu_exec calls",
         description:
-            "Kill every active one-shot exec subprocess. Leaves REPL " +
-            "buckets and the doc singleton untouched — use `nu_repl_kill` " +
-            "or `nu_repl_nuke` to terminate REPL state.",
+            "Kill every active one-shot exec subprocess AND any bashEnv " +
+            "runner subprocess associated with an in-flight nu_exec call. " +
+            "Leaves REPL buckets and the doc singleton untouched — use " +
+            "`nu_repl_kill` or `nu_repl_nuke` to terminate REPL state.",
         inputSchema: {},
         outputSchema: { aborted: z.number() },
         annotations: {
@@ -848,7 +850,7 @@ server.registerTool(
             content: [
                 {
                     type: "text",
-                    text: `Aborted ${aborted} exec subprocess(es).`,
+                    text: `Aborted ${aborted} exec/bash subprocess(es).`,
                 },
             ],
             structuredContent: { aborted },

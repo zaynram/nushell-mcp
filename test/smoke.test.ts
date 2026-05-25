@@ -9,6 +9,7 @@
  * Run with: bun test
  */
 import { describe, expect, test } from "bun:test"
+import { tmpdir } from "node:os"
 import {
     _resetBashRunnerProbe,
     getCommandDoc,
@@ -19,6 +20,11 @@ import {
     runRaw,
     searchDocs,
 } from "../src/nu.js"
+
+// Use the OS temp dir instead of a hardcoded "/tmp" so the cwd / status
+// portability assertions stay valid across Linux, macOS, and Windows
+// (Copilot 3297050891).
+const TMP_DIR = tmpdir()
 
 /**
  * Shared bash-runtime probe. `loadBashEnv("true")` exercises the same detect /
@@ -768,13 +774,13 @@ describe("MCP server wiring", () => {
                 await call("nu_repl_spawn", { key: "statbench" })
                 await call("nu_repl_write", {
                     key: "statbench",
-                    input: "cd /tmp",
+                    input: `cd "${TMP_DIR}"`,
                 })
                 const stat = await call("nu_repl_status", {
                     key: "statbench",
                 })
                 expect(stat.result.isError).toBeFalsy()
-                expect(stat.result.structuredContent?.cwd).toBe("/tmp")
+                expect(stat.result.structuredContent?.cwd).toBe(TMP_DIR)
                 expect(
                     (stat.result.structuredContent?.historyIndex as number) ??
                         0,

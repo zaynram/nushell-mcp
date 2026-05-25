@@ -6,7 +6,13 @@
  * Plan B Cycle 3.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { tmpdir } from "node:os"
 import { killAll as nuKillAll } from "../src/nu.js"
+
+// Use the OS temp dir instead of a hardcoded "/tmp" so envelope-cache /
+// cwd-tracking tests stay portable across Linux, macOS, and Windows
+// (Copilot 3297050914 / 3297050941).
+const TMP_DIR = tmpdir()
 import { type NuMcpToolResponse, getNuMcpClient } from "../src/nuMcpClient.js"
 import { NuMcpPool, getReplPool, parseEvaluateEnvelope } from "../src/nuMcpPool.js"
 
@@ -365,11 +371,11 @@ describe("NuMcpPool — Cycle 5: ring buffer + envelope cache", () => {
         const p = new NuMcpPool({ maxRepls: 1 })
         try {
             p.spawn("env")
-            await p.call("env", "evaluate", { input: "cd /tmp" })
+            await p.call("env", "evaluate", { input: `cd "${TMP_DIR}"` })
             const env = p.envelope("env")
             expect(env.kind).toBe("ok")
             if (env.kind !== "ok") throw new Error("envelope not ok")
-            expect(env.cwd).toBe("/tmp")
+            expect(env.cwd).toBe(TMP_DIR)
         } finally {
             p.nukeAll()
         }
@@ -751,7 +757,7 @@ describe("NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
         const p = new NuMcpPool({ maxRepls: 1 })
         try {
             p.spawn("atomic-env")
-            await p.call("atomic-env", "evaluate", { input: "cd /tmp" })
+            await p.call("atomic-env", "evaluate", { input: `cd "${TMP_DIR}"` })
             // The second call's envelope should reflect cwd=/tmp set above.
             const { response, envelope } = await p.call("atomic-env", "evaluate", {
                 input: "1 + 1",
@@ -773,7 +779,7 @@ describe("NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
         try {
             p.spawn("pruned-env")
             // Establish a cwd in the session.
-            await p.call("pruned-env", "evaluate", { input: "cd /tmp" })
+            await p.call("pruned-env", "evaluate", { input: `cd "${TMP_DIR}"` })
             // Start the call and capture the return atomically.
             const callPromise = p.call("pruned-env", "evaluate", { input: "1" })
             // The result must be available regardless of what happens next.
