@@ -2,8 +2,14 @@
  * NuMcpPool — Map-backed registry of `nu --mcp` child processes, keyed by
  * REPL bucket name. Each bucket is one NuMcpChild. The pool enforces a
  * configurable cap (`MAX_REPLS`, default 10, overridable per-instance or via
- * `NUSHELL_MCP_MAX_REPLS`), validates keys through the shared `sanitizeKey`
- * regex, and is the only authority that creates / destroys REPL children.
+ * `NUSHELL_MCP_MAX_REPLS`) and is the only authority that creates / destroys
+ * REPL children. Key validation via `sanitizeKey` is enforced at `spawn()`
+ * only — other methods (`has` / `get` / `call` / `kill` / `clear` / `status`
+ * / `lastResponse` / `envelope`) treat the key as a plain Map lookup. Non-
+ * conforming keys can never reach an existing bucket because spawn rejects
+ * them at registration; lookup-only methods therefore see "bucket does not
+ * exist" / `has → false` for invalid input, which is the correct treatment
+ * for "this is not a registered bucket".
  *
  * Plan B Cycle 3.
  */

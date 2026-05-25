@@ -312,7 +312,19 @@ export class NuMcpChild {
      */
     ensureReady(): Promise<void> {
         if (this.readyPromise) return this.readyPromise
-        this.readyPromise = this.startup()
+        this.readyPromise = this.startup().catch((err) => {
+            // Reset on startup rejection so subsequent ensureReady() calls
+            // can retry instead of returning the same cached rejection
+            // forever. handleExit also clears readyPromise, but only fires
+            // if the child was spawned and later exited — a startup that
+            // fails BEFORE the spawn (or after a write error that the
+            // child outlives momentarily) would otherwise wedge the
+            // instance permanently. Concurrent in-flight ensureReady()
+            // callers all see the same rejection (correct); only callers
+            // after the reset get a fresh attempt.
+            this.readyPromise = null
+            throw err
+        })
         return this.readyPromise
     }
 
