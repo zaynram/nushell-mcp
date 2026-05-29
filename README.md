@@ -4,7 +4,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [Nushell](https://www.nushell.sh). It gives an AI model three things:
 
 - **(a) Queryable documentation** — search and read help for any installed `nu` command.
-- **(b) An execution environment** — run one-shot `nu` pipelines and get *structured* data back, not just text.
+- **(b) An execution environment** — run one-shot `nu` pipelines and get _structured_ data back, not just text.
 - **(c) Persistent REPL sessions** — long-lived `nu` shells that retain `cd`, `let`, and env state across calls, addressable by name.
 
 It is the spiritual successor to `terminal-mcp` (lineage: `winterm-mcp`) and
@@ -20,32 +20,32 @@ Twelve tools, grouped by purpose.
 
 ### Execution (one-shot)
 
-| Tool | Purpose |
-|------|---------|
-| `nu_exec` | Evaluate a Nushell pipeline in a fresh `nu` process; returns rendered output, the final value as **NUON**, and its type. Accepts an `input` dataset piped in as `$in`, and an optional `bashEnv` snippet whose exported vars are merged into nu's env for the call. |
-| `nu_exec_abort` | Cancel every in-flight `nu_exec` call. Leaves REPL buckets and the doc singleton alone. |
+| Tool            | Purpose                                                                                                                                                                                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nu_exec`       | Evaluate a Nushell pipeline in a fresh `nu` process; returns rendered output, the final value as **NUON**, and its type. Accepts an `input` dataset piped in as `$in`, and an optional `bashEnv` snippet whose exported vars are merged into nu's env for the call. |
+| `nu_exec_abort` | Cancel every in-flight `nu_exec` call. Leaves REPL buckets and the doc singleton alone.                                                                                                                                                                             |
 
 ### Documentation
 
-| Tool | Purpose |
-|------|---------|
-| `nu_doc_search` | Search installed commands by name, description, and search terms. |
-| `nu_doc_help` | Full help for one command; returns `found` plus `help`, and includes `suggestions` on a miss. |
+| Tool            | Purpose                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `nu_doc_search` | Search installed commands by name, description, and search terms.                             |
+| `nu_doc_help`   | Full help for one command; returns `found` plus `help`, and includes `suggestions` on a miss. |
 
 ### REPL buckets (persistent)
 
 A bucket is a long-lived `nu --mcp` child addressed by a name (regex `[A-Za-z0-9_-]+`). State — `cd`, `let`, env mutations — persists within a bucket; buckets are isolated from each other.
 
-| Tool | Purpose |
-|------|---------|
-| `nu_repl_spawn` | Start a new REPL bucket under the given key. Errors if the key is taken or the pool is at capacity. |
-| `nu_repl_list` | List active bucket keys. |
-| `nu_repl_kill` | Kill one bucket and free its key. |
-| `nu_repl_nuke` | Kill every active bucket. |
-| `nu_repl_write` | Run a pipeline inside a bucket; the bucket's session state persists. |
-| `nu_repl_read` | Read the bucket's most-recent response without re-running anything. |
-| `nu_repl_clear` | `mode: "buffer"` empties the bucket's response ring; `mode: "all"` kills and respawns the bucket (wipes session state). |
-| `nu_repl_status` | Best-effort snapshot: cwd, history index, last response timestamp, and live env keys. |
+| Tool             | Purpose                                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `nu_repl_spawn`  | Start a new REPL bucket under the given key. Errors if the key is taken or the pool is at capacity.                     |
+| `nu_repl_list`   | List active bucket keys.                                                                                                |
+| `nu_repl_kill`   | Kill one bucket and free its key.                                                                                       |
+| `nu_repl_nuke`   | Kill every active bucket.                                                                                               |
+| `nu_repl_write`  | Run a pipeline inside a bucket; the bucket's session state persists.                                                    |
+| `nu_repl_read`   | Read the bucket's most-recent response without re-running anything.                                                     |
+| `nu_repl_clear`  | `mode: "buffer"` empties the bucket's response ring; `mode: "all"` kills and respawns the bucket (wipes session state). |
+| `nu_repl_status` | Best-effort snapshot: cwd, history index, last response timestamp, and live env keys.                                   |
 
 ## Requirements
 
@@ -55,26 +55,21 @@ A bucket is a long-lived `nu --mcp` child addressed by a name (regex `[A-Za-z0-9
 ## Install
 
 ```bash
-git clone https://github.com/zaynram/nushell-mcp.git
-cd nushell-mcp
-bun install
+bun add --global https://github.com/zaynram/nushell-mcp/releases/latest/download/nushell-mcp.tgz
 ```
 
-Run it directly with `bun run start`, or wire it into an MCP client.
+Run it directly with `bunx nushell-mcp`, or wire it into an MCP client.
 
-## Client configuration
+## Client Configuration
 
 Add to your client's MCP server config — for Claude Desktop, that is
 `%APPDATA%/Claude/claude_desktop_config.json`:
 
 ```json
 {
-  "mcpServers": {
-    "nushell-mcp": {
-      "command": "bun",
-      "args": ["C:\\Users\\ramda\\mcp-data\\nushell-mcp\\src\\index.ts"]
+    "mcpServers": {
+        "nushell-mcp": { "command": "bunx", "args": ["nushell-mcp"] }
     }
-  }
 }
 ```
 
@@ -83,12 +78,12 @@ Adjust the path if the project lives elsewhere. The server speaks MCP over
 
 ### Environment variables
 
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `NUSHELL_MCP_NU_PATH` | first `nu` on `PATH` | Absolute path to the `nu` executable. |
-| `NUSHELL_MCP_TIMEOUT_MS` | `30000` | Default per-call timeout for `nu_exec`; the tool's `timeoutMs` argument overrides it per call. |
-| `NUSHELL_MCP_MAX_REPLS` | `10` | Cap on simultaneous REPL buckets. `nu_repl_spawn` errors past this. |
-| `NUSHELL_MCP_BASH_PATH` | (auto-probe: WSL → Git Bash → `bash`) | Override the bash runner used by `nu_exec`'s `bashEnv`. |
+| Variable                 | Default                               | Effect                                                                                         |
+| ------------------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `NUSHELL_MCP_NU_PATH`    | first `nu` on `PATH`                  | Absolute path to the `nu` executable.                                                          |
+| `NUSHELL_MCP_TIMEOUT_MS` | `30000`                               | Default per-call timeout for `nu_exec`; the tool's `timeoutMs` argument overrides it per call. |
+| `NUSHELL_MCP_MAX_REPLS`  | `10`                                  | Cap on simultaneous REPL buckets. `nu_repl_spawn` errors past this.                            |
+| `NUSHELL_MCP_BASH_PATH`  | (auto-probe: WSL → Git Bash → `bash`) | Override the bash runner used by `nu_exec`'s `bashEnv`.                                        |
 
 ## Design decisions
 
@@ -99,7 +94,7 @@ in-process command metadata via the `nu --mcp` singleton — specifically its
 `list_commands` and `command_help` tools — **not** the online docs corpus at
 `nushell.sh`. Rationale:
 
-- **Version-accurate.** The help text always matches the *installed* `nu`, so
+- **Version-accurate.** The help text always matches the _installed_ `nu`, so
   the model never reads flags or examples that don't exist locally.
 - **Offline and low-latency.** Every query routes through a process-wide
   `nu --mcp` singleton — no per-call spawn, no network fetch, no corpus to
@@ -108,7 +103,7 @@ in-process command metadata via the `nu --mcp` singleton — specifically its
   `command_help` carries signatures and examples — which maps cleanly onto MCP
   structured output with no scraping.
 
-The trade-off is that conceptual prose (the topical *guides* on the website)
+The trade-off is that conceptual prose (the topical _guides_ on the website)
 is not covered — only per-command reference. For an agent that consults docs
 to drive `nu_exec`, per-command reference is the higher-value half, and it is
 the half that must stay version-accurate.
@@ -134,7 +129,7 @@ its in-process command metadata.
 state survives. Rationale:
 
 - Concurrent one-shot calls are independent and cannot interfere.
-- Nushell's value proposition is the self-contained *pipeline*. State that
+- Nushell's value proposition is the self-contained _pipeline_. State that
   needs to survive (a directory, an env var, a dataset) is better passed
   explicitly per call than implied by hidden session state.
 
@@ -147,7 +142,7 @@ Consequences, and how they are handled for `nu_exec`:
   (default 30 s); `nu_exec_abort` terminates anything still running. A killed
   call reports `timedOut: true`.
 
-**When one-shot is the wrong fit**, the REPL pool fills the gap. `nu_repl_spawn` starts a long-lived `nu --mcp` child under a named key; subsequent `nu_repl_write` calls reuse it. `cd foo` survives. `let x = 42` survives. Env mutations survive — within that bucket. Different buckets share nothing, and the pool caps simultaneous buckets at `NUSHELL_MCP_MAX_REPLS` (default 10). The pool serializes calls *within* a bucket (one bucket = one in-flight pipeline at a time) but runs *across* buckets in parallel — concurrent work on two buckets does not queue.
+**When one-shot is the wrong fit**, the REPL pool fills the gap. `nu_repl_spawn` starts a long-lived `nu --mcp` child under a named key; subsequent `nu_repl_write` calls reuse it. `cd foo` survives. `let x = 42` survives. Env mutations survive — within that bucket. Different buckets share nothing, and the pool caps simultaneous buckets at `NUSHELL_MCP_MAX_REPLS` (default 10). The pool serializes calls _within_ a bucket (one bucket = one in-flight pipeline at a time) but runs _across_ buckets in parallel — concurrent work on two buckets does not queue.
 
 ### Structured output: NUON, not JSON
 

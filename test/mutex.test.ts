@@ -1,14 +1,14 @@
+import { Mutex } from '#mutex'
 /**
  * Tests for the async Mutex primitive. Pure — no subprocess or timer
  * dependency beyond `setTimeout` for fairness probes.
  *
  * Plan B Cycle 1.
  */
-import { describe, expect, test } from "bun:test"
-import { Mutex } from "../src/mutex.js"
+import { describe, expect, test } from 'bun:test'
 
-describe("Mutex", () => {
-    test("sequential acquire/release", async () => {
+describe('Mutex', () => {
+    test('sequential acquire/release', async () => {
         const m = new Mutex()
         const r1 = await m.acquire()
         r1()
@@ -18,33 +18,33 @@ describe("Mutex", () => {
         expect(true).toBe(true)
     })
 
-    test("acquire blocks while held; resolves after release", async () => {
+    test('acquire blocks while held; resolves after release', async () => {
         const m = new Mutex()
         const r1 = await m.acquire()
         let second = false
-        const promise = m.acquire().then((r) => {
+        const promise = m.acquire().then(r => {
             second = true
             r()
         })
         // Yield twice; `second` must still be false because lock is held.
-        await new Promise((r) => setTimeout(r, 20))
+        await new Promise(r => setTimeout(r, 20))
         expect(second).toBe(false)
         r1()
         await promise
         expect(second).toBe(true)
     })
 
-    test("concurrent acquires resolve in FIFO order", async () => {
+    test('concurrent acquires resolve in FIFO order', async () => {
         const m = new Mutex()
         const order: number[] = []
-        const tasks = [1, 2, 3, 4].map((n) =>
+        const tasks = [1, 2, 3, 4].map(n =>
             (async () => {
                 const r = await m.acquire()
                 order.push(n)
                 // Hold briefly so out-of-order resolves would be detectable.
-                await new Promise((r) => setTimeout(r, 5))
+                await new Promise(r => setTimeout(r, 5))
                 r()
-            })(),
+            })()
         )
         await Promise.all(tasks)
         expect(order).toEqual([1, 2, 3, 4])
@@ -54,7 +54,7 @@ describe("Mutex", () => {
         const m = new Mutex()
         const r1 = await m.acquire()
         try {
-            throw new Error("boom")
+            throw new Error('boom')
         } catch {
             // swallow
         } finally {
@@ -78,7 +78,7 @@ describe("Mutex", () => {
             (async () => {
                 const r = await m.acquire()
                 order.push(1)
-                await new Promise((r) => setTimeout(r, 5))
+                await new Promise(r => setTimeout(r, 5))
                 r()
             })(),
             (async () => {

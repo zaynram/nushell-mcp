@@ -1,24 +1,16 @@
 {
     "compilerOptions": {
         "target": "ES2022",
-        "module": "nodenext",
-        "moduleResolution": "nodenext",
-        "outDir": "./build",
-        "rootDir": "./src",
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "outDir": "./dist",
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,
-        "types": [
-            "node",
-            "bun-types"
-        ]
+        "paths": { "^*": ["./*"], "#*": ["./src/*"], "%*": ["./test/*"] },
+        "types": ["node", "bun-types"]
     },
-    "include": [
-        "src/**/*"
-    ],
-    "exclude": [
-        "node_modules",
-        "build"
-    ]
+    "include": ["./src/**/*.ts", "./test/**/*.ts"],
+    "exclude": ["node_modules", "dist"]
 }

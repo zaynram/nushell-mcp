@@ -11,7 +11,7 @@
 
 export class Mutex {
   /** The end of the current chain. New acquires await this and then extend it. */
-  private chain: Promise<void> = Promise.resolve()
+  private chain: Promise<void> = Promise.resolve();
 
   /**
    * Wait until any prior holder releases, then take the lock. Returns a
@@ -20,21 +20,21 @@ export class Mutex {
    */
   async acquire(): Promise<() => void> {
     // Use a sentinel to make release idempotent.
-    let released = false
-    let release!: () => void
+    let released = false;
+    let release!: () => void;
     const next = new Promise<void>((resolve) => {
       release = () => {
-        if (released) return
-        released = true
-        resolve()
-      }
-    })
-    const prev = this.chain
+        if (released) return;
+        released = true;
+        resolve();
+      };
+    });
+    const prev = this.chain;
     // Extend the chain *before* awaiting prev — otherwise concurrent
     // acquires would all see the same `prev` and race to extend, breaking
     // FIFO order.
-    this.chain = next
-    await prev
-    return release
+    this.chain = next;
+    await prev;
+    return release;
   }
 }

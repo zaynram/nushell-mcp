@@ -17,19 +17,19 @@
  *   - `killAll` kills every role.
  *   - `abortExec` kills only `"exec"` and `"bash"`.
  */
-export type ActiveRole = "exec" | "bash" | "repl" | "doc"
+export type ActiveRole = "exec" | "bash" | "repl" | "doc";
 
 // Every nu/bash subprocess this server has spawned and not yet reaped.
-export const active = new Map<Bun.Subprocess, ActiveRole>()
+export const active = new Map<Bun.Subprocess, ActiveRole>();
 
 /** Register a subprocess in the active set. */
 export function addActive(proc: Bun.Subprocess, role: ActiveRole): void {
-    active.set(proc, role)
+  active.set(proc, role);
 }
 
 /** Remove a subprocess from the active set (idempotent). */
 export function removeActive(proc: Bun.Subprocess): void {
-    active.delete(proc)
+  active.delete(proc);
 }
 
 /**
@@ -38,5 +38,5 @@ export function removeActive(proc: Bun.Subprocess): void {
  * surface — consumers outside tests should use `killAll` / `abortExec`.
  */
 export function _getActiveRoles(): ActiveRole[] {
-    return Array.from(active.values())
+  return Array.from(active.values());
 }

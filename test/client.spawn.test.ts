@@ -1,3 +1,5 @@
+import { getNuMcpClient, NuMcpChild, type NuMcpToolResponse } from '#client'
+import { killAll as nuKillAll } from '#nu'
 /**
  * Integration tests for the singleton `nu --mcp` client lifecycle. Spawns a
  * real `nu --mcp` subprocess; the per-file afterAll teardown kills it so
@@ -5,13 +7,7 @@
  *
  * Plan A, Cycle 2+.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { killAll as nuKillAll } from "../src/nu.js"
-import {
-    NuMcpChild,
-    type NuMcpToolResponse,
-    getNuMcpClient,
-} from "../src/nuMcpClient.js"
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 
 /**
  * Narrow a `NuMcpToolResponse` to its success branch. The discriminated
@@ -21,7 +17,7 @@ import {
  * throw` boilerplate.
  */
 function assertOk(
-    r: NuMcpToolResponse,
+    r: NuMcpToolResponse
 ): asserts r is Extract<NuMcpToolResponse, { isError: false }> {
     if (r.isError) {
         throw new Error(`expected success response, got error: ${r.errorText}`)
@@ -39,83 +35,83 @@ afterAll(() => {
     getNuMcpClient().kill()
 })
 
-describe("getNuMcpClient — Cycle 2: lazy spawn + initialize handshake", () => {
-    test("not alive before any call", () => {
+describe('getNuMcpClient — Cycle 2: lazy spawn + initialize handshake', () => {
+    test('not alive before any call', () => {
         const client = getNuMcpClient()
         expect(client.isAlive()).toBe(false)
     })
 
-    test("first callTool spawns child, runs initialize, returns response", async () => {
+    test('first callTool spawns child, runs initialize, returns response', async () => {
         const client = getNuMcpClient()
-        const response = await client.callTool("list_commands", {
-            find: "where",
+        const response = await client.callTool('list_commands', {
+            find: 'where',
         })
         assertOk(response)
         // Output should contain the `where` builtin
-        expect(response.text).toContain("where")
+        expect(response.text).toContain('where')
         expect(client.isAlive()).toBe(true)
     })
 
-    test("subsequent calls reuse the same child", async () => {
+    test('subsequent calls reuse the same child', async () => {
         const client = getNuMcpClient()
         expect(client.isAlive()).toBe(true)
-        const response = await client.callTool("command_help", {
-            name: "where",
+        const response = await client.callTool('command_help', {
+            name: 'where',
         })
         assertOk(response)
-        expect(response.text).toContain("Filter values")
+        expect(response.text).toContain('Filter values')
     })
 
-    test("calling a tool with an invalid name surfaces error", async () => {
+    test('calling a tool with an invalid name surfaces error', async () => {
         const client = getNuMcpClient()
-        const response = await client.callTool("command_help", {
-            name: "this-command-does-not-exist-xyz",
+        const response = await client.callTool('command_help', {
+            name: 'this-command-does-not-exist-xyz',
         })
         expect(response.isError).toBe(true)
     })
 })
 
-describe("getNuMcpClient — Cycle 3: concurrent request correlation", () => {
-    test("two concurrent callTools resolve to their own responses", async () => {
+describe('getNuMcpClient — Cycle 3: concurrent request correlation', () => {
+    test('two concurrent callTools resolve to their own responses', async () => {
         const client = getNuMcpClient()
         // Ensure singleton is up (kill from a prior test forces respawn here).
-        await client.callTool("list_commands", { find: "ls" })
+        await client.callTool('list_commands', { find: 'ls' })
         const [list, help] = await Promise.all([
-            client.callTool("list_commands", { find: "where" }),
-            client.callTool("command_help", { name: "where" }),
+            client.callTool('list_commands', { find: 'where' }),
+            client.callTool('command_help', { name: 'where' }),
         ])
         assertOk(list)
         assertOk(help)
         // Each response must match its own request, not the other's.
-        expect(list.text).toContain("where")
-        expect(help.text).toContain("Filter values")
-        expect(help.text).not.toContain("polars arg-where")
+        expect(list.text).toContain('where')
+        expect(help.text).toContain('Filter values')
+        expect(help.text).not.toContain('polars arg-where')
     })
 
-    test("kill() rejects in-flight pending requests", async () => {
+    test('kill() rejects in-flight pending requests', async () => {
         const client = getNuMcpClient()
-        await client.callTool("list_commands", { find: "ls" })
+        await client.callTool('list_commands', { find: 'ls' })
         // Kick off a request without awaiting, then pump the microtask queue
         // so callTool gets past `await ensureReady()` and registers a
         // pending entry before we kill — otherwise the call fails with
         // "no stdin" on resume (also a valid rejection, but not the path
         // this test is meant to exercise).
-        const pending = client.callTool("list_commands", { find: "anything" })
-        await new Promise((r) => setImmediate(r))
+        const pending = client.callTool('list_commands', { find: 'anything' })
+        await new Promise(r => setImmediate(r))
         client.kill()
         await expect(pending).rejects.toThrow(/killed|exited/)
     })
 })
 
-describe("getNuMcpClient — Cycle 4: restart on death", () => {
-    test("after kill(), next callTool transparently respawns", async () => {
+describe('getNuMcpClient — Cycle 4: restart on death', () => {
+    test('after kill(), next callTool transparently respawns', async () => {
         const client = getNuMcpClient()
-        await client.callTool("list_commands", { find: "ls" })
+        await client.callTool('list_commands', { find: 'ls' })
         expect(client.isAlive()).toBe(true)
         client.kill()
         expect(client.isAlive()).toBe(false)
-        const response = await client.callTool("list_commands", {
-            find: "where",
+        const response = await client.callTool('list_commands', {
+            find: 'where',
         })
         expect(response.isError).toBe(false)
         expect(client.isAlive()).toBe(true)
@@ -123,43 +119,43 @@ describe("getNuMcpClient — Cycle 4: restart on death", () => {
 
     test("two concurrent calls after kill don't double-spawn", async () => {
         const client = getNuMcpClient()
-        await client.callTool("list_commands", { find: "ls" })
+        await client.callTool('list_commands', { find: 'ls' })
         client.kill()
         // Both calls race to spawn; the readyPromise gate must hand back the
         // same in-flight startup to both, not start two children.
         const [r1, r2] = await Promise.all([
-            client.callTool("list_commands", { find: "where" }),
-            client.callTool("command_help", { name: "where" }),
+            client.callTool('list_commands', { find: 'where' }),
+            client.callTool('command_help', { name: 'where' }),
         ])
         assertOk(r1)
         assertOk(r2)
-        expect(r2.text).toContain("Filter values")
+        expect(r2.text).toContain('Filter values')
     })
 })
 
-describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
-    test("new NuMcpChild() can be created without going through the singleton", async () => {
-        const child = new NuMcpChild("doc")
+describe('NuMcpChild — Plan B Cycle 2: instantiable independently', () => {
+    test('new NuMcpChild() can be created without going through the singleton', async () => {
+        const child = new NuMcpChild('doc')
         try {
             expect(child.isAlive()).toBe(false)
-            const response = await child.callTool("list_commands", {
-                find: "where",
+            const response = await child.callTool('list_commands', {
+                find: 'where',
             })
             assertOk(response)
-            expect(response.text).toContain("where")
+            expect(response.text).toContain('where')
             expect(child.isAlive()).toBe(true)
         } finally {
             child.kill()
         }
     })
 
-    test("two NuMcpChild instances are isolated — killing one leaves the other alive", async () => {
-        const a = new NuMcpChild("doc")
-        const b = new NuMcpChild("doc")
+    test('two NuMcpChild instances are isolated — killing one leaves the other alive', async () => {
+        const a = new NuMcpChild('doc')
+        const b = new NuMcpChild('doc')
         try {
             await Promise.all([
-                a.callTool("list_commands", { find: "ls" }),
-                b.callTool("list_commands", { find: "ls" }),
+                a.callTool('list_commands', { find: 'ls' }),
+                b.callTool('list_commands', { find: 'ls' }),
             ])
             expect(a.isAlive()).toBe(true)
             expect(b.isAlive()).toBe(true)
@@ -167,9 +163,9 @@ describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
             expect(a.isAlive()).toBe(false)
             expect(b.isAlive()).toBe(true)
             // b can still service requests after a was killed
-            const response = await b.callTool("command_help", { name: "where" })
+            const response = await b.callTool('command_help', { name: 'where' })
             assertOk(response)
-            expect(response.text).toContain("Filter values")
+            expect(response.text).toContain('Filter values')
         } finally {
             a.kill()
             b.kill()
@@ -179,9 +175,9 @@ describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
     test("singleton and a fresh NuMcpChild instance don't share lifecycle", async () => {
         // Reset singleton first so we know its state.
         getNuMcpClient().kill()
-        const fresh = new NuMcpChild("doc")
+        const fresh = new NuMcpChild('doc')
         try {
-            await fresh.callTool("list_commands", { find: "ls" })
+            await fresh.callTool('list_commands', { find: 'ls' })
             expect(fresh.isAlive()).toBe(true)
             // Singleton must remain dead — we only touched the fresh instance.
             expect(getNuMcpClient().isAlive()).toBe(false)
@@ -191,23 +187,23 @@ describe("NuMcpChild — Plan B Cycle 2: instantiable independently", () => {
     })
 })
 
-describe("getNuMcpClient — Cycle 5: killAll integration", () => {
-    test("nu.killAll() also kills the doc singleton", async () => {
+describe('getNuMcpClient — Cycle 5: killAll integration', () => {
+    test('nu.killAll() also kills the doc singleton', async () => {
         const client = getNuMcpClient()
-        await client.callTool("list_commands", { find: "ls" })
+        await client.callTool('list_commands', { find: 'ls' })
         expect(client.isAlive()).toBe(true)
         nuKillAll()
         expect(client.isAlive()).toBe(false)
     })
 
-    test("count returned by killAll includes the singleton when alive", async () => {
+    test('count returned by killAll includes the singleton when alive', async () => {
         const client = getNuMcpClient()
-        await client.callTool("list_commands", { find: "ls" })
+        await client.callTool('list_commands', { find: 'ls' })
         const killed = nuKillAll()
         expect(killed).toBeGreaterThanOrEqual(1)
     })
 
-    test("killAll on a dead singleton does not over-count", () => {
+    test('killAll on a dead singleton does not over-count', () => {
         const client = getNuMcpClient()
         expect(client.isAlive()).toBe(false)
         const killed = nuKillAll()
@@ -216,14 +212,14 @@ describe("getNuMcpClient — Cycle 5: killAll integration", () => {
     })
 })
 
-describe("NuMcpChild — onExit listener-error isolation", () => {
-    test("one throwing listener does not prevent subsequent listeners from firing", async () => {
-        const child = new NuMcpChild("doc")
+describe('NuMcpChild — onExit listener-error isolation', () => {
+    test('one throwing listener does not prevent subsequent listeners from firing', async () => {
+        const child = new NuMcpChild('doc')
         let called2 = false
         let called3 = false
 
         child.onExit(() => {
-            throw new Error("listener-1 boom")
+            throw new Error('listener-1 boom')
         })
         child.onExit(() => {
             called2 = true
@@ -240,8 +236,8 @@ describe("NuMcpChild — onExit listener-error isolation", () => {
         expect(called3).toBe(true)
     })
 
-    test("onExit registered after exit fires via queueMicrotask", async () => {
-        const child = new NuMcpChild("doc")
+    test('onExit registered after exit fires via queueMicrotask', async () => {
+        const child = new NuMcpChild('doc')
 
         // Kill first — fireExit marks child.exited = true.
         child.kill()
@@ -253,7 +249,7 @@ describe("NuMcpChild — onExit listener-error isolation", () => {
 
         // The callback was scheduled via queueMicrotask; flush the microtask
         // queue before asserting.
-        await new Promise<void>((r) => queueMicrotask(r))
+        await new Promise<void>(r => queueMicrotask(r))
 
         expect(called4).toBe(true)
     })

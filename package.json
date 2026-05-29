@@ -1,15 +1,21 @@
 {
     "name": "nushell-mcp",
-    "version": "0.2.0",
+    "version": "0.2.3",
     "description": "Model Context Protocol server exposing queryable Nushell documentation and a Nushell execution environment.",
     "type": "module",
-    "bin": {
-        "nushell-mcp": "src/index.ts"
+    "packageManager": "bun@1.3.14",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/zaynram/nushell-mcp.git"
     },
+    "bin": { "nushell-mcp": "dist/index.js" },
+    "files": ["dist/", "README.md", "LICENSE"],
     "scripts": {
-        "start": "bun run src/index.ts",
-        "build": "bun build src/index.ts --target=bun --outdir=build",
-        "test": "bun test"
+        "start": "bun --silent run dist/index.js",
+        "dev": "bun --silent run src/index.ts",
+        "build": "bun --silent build src/index.ts --target=bun --outdir=dist && cp config/config.nu dist",
+        "test": "bun test",
+        "check": "bunx tsc --noEmit && bun test --bail"
     },
     "keywords": [
         "mcp",

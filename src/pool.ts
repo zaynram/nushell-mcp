@@ -13,26 +13,26 @@
  *
  * Plan B Cycle 3.
  */
-import { Mutex } from "./mutex.js"
-import { sanitizeKey } from "./nu.js"
-import { NuMcpChild, type NuMcpToolResponse } from "./nuMcpClient.js"
+import { NuMcpChild, type NuMcpToolResponse } from "./client.js";
+import { Mutex } from "./mutex.js";
+import { sanitizeKey } from "./nu.js";
 
 export interface NuMcpPoolOptions {
   /** Hard cap on simultaneous buckets. Overrides env. Default: env or 10. */
-  maxRepls?: number
+  maxRepls?: number;
 }
 
-const DEFAULT_MAX_REPLS = 10
-const RING_BUFFER_SIZE = 5
+const DEFAULT_MAX_REPLS = 10;
+const RING_BUFFER_SIZE = 5;
 
 function resolveMaxRepls(opt: NuMcpPoolOptions | undefined): number {
-  if (opt?.maxRepls !== undefined) return opt.maxRepls
-  const fromEnv = process.env.NUSHELL_MCP_MAX_REPLS
+  if (opt?.maxRepls !== undefined) return opt.maxRepls;
+  const fromEnv = process.env.NUSHELL_MCP_MAX_REPLS;
   if (fromEnv) {
-    const n = Number.parseInt(fromEnv, 10)
-    if (Number.isFinite(n) && n > 0) return n
+    const n = Number.parseInt(fromEnv, 10);
+    if (Number.isFinite(n) && n > 0) return n;
   }
-  return DEFAULT_MAX_REPLS
+  return DEFAULT_MAX_REPLS;
 }
 
 /**
@@ -47,7 +47,7 @@ function resolveMaxRepls(opt: NuMcpPoolOptions | undefined): number {
  */
 export type EvaluateEnvelope =
   | { kind: "empty" }
-  | { kind: "ok"; cwd: string; historyIndex?: number; timestamp?: string }
+  | { kind: "ok"; cwd: string; historyIndex?: number; timestamp?: string };
 
 /**
  * Return type of `NuMcpPool.status()`. Bifurcates independently from
@@ -59,17 +59,17 @@ export type EvaluateEnvelope =
  */
 export type BucketStatus =
   | {
-      kind: "ok"
-      cwd?: string
-      historyIndex?: number
-      timestamp?: string
-      envKeys: string[]
-    }
+    kind: "ok";
+    cwd?: string;
+    historyIndex?: number;
+    timestamp?: string;
+    envKeys: string[];
+  }
   | {
-      kind: "probe-error"
-      probeError: string
-      cachedEnvelope: EvaluateEnvelope
-    }
+    kind: "probe-error";
+    probeError: string;
+    cachedEnvelope: EvaluateEnvelope;
+  };
 
 /**
  * Pure: extract envelope fields from an `evaluate` response's text. Tolerant
@@ -89,38 +89,38 @@ export function parseEvaluateEnvelope(text: string): EvaluateEnvelope {
   const parseNuonField = (field: string): string | undefined => {
     const m = new RegExp(
       `(?:^|[,{])\\s*${field}:\\s*([^,}]+?)\\s*(?=[,}])`,
-    ).exec(text)
-    return m?.[1]
-  }
+    ).exec(text);
+    return m?.[1];
+  };
 
-  const cwd = parseNuonField("cwd")
-  if (!cwd) return { kind: "empty" }
-  const env: EvaluateEnvelope = { kind: "ok", cwd }
-  const hist = parseNuonField("history_index")
+  const cwd = parseNuonField("cwd");
+  if (!cwd) return { kind: "empty" };
+  const env: EvaluateEnvelope = { kind: "ok", cwd };
+  const hist = parseNuonField("history_index");
   if (hist) {
-    const n = Number.parseInt(hist, 10)
-    if (Number.isFinite(n)) env.historyIndex = n
+    const n = Number.parseInt(hist, 10);
+    if (Number.isFinite(n)) env.historyIndex = n;
   }
-  const ts = parseNuonField("timestamp")
-  if (ts) env.timestamp = ts
-  return env
+  const ts = parseNuonField("timestamp");
+  if (ts) env.timestamp = ts;
+  return env;
 }
 
 interface BucketEntry {
-  child: NuMcpChild
-  mutex: Mutex
+  child: NuMcpChild;
+  mutex: Mutex;
   /** Head-first ring of recent responses; index 0 = most recent. */
-  buffer: NuMcpToolResponse[]
+  buffer: NuMcpToolResponse[];
   /** Last-known envelope state from `evaluate` responses. */
-  envelope: EvaluateEnvelope
+  envelope: EvaluateEnvelope;
 }
 
 export class NuMcpPool {
-  private readonly buckets = new Map<string, BucketEntry>()
-  private readonly maxRepls: number
+  private readonly buckets = new Map<string, BucketEntry>();
+  private readonly maxRepls: number;
 
   constructor(opt?: NuMcpPoolOptions) {
-    this.maxRepls = Math.max(resolveMaxRepls(opt), 1)
+    this.maxRepls = Math.max(resolveMaxRepls(opt), 1);
   }
 
   /**
@@ -128,46 +128,47 @@ export class NuMcpPool {
    * the pool is at capacity.
    */
   spawn(key: string): NuMcpChild {
-    const safe = sanitizeKey(key)
+    const safe = sanitizeKey(key);
     if (this.buckets.has(safe)) {
-      throw new Error(`bucket "${safe}" already exists`)
+      throw new Error(`bucket "${safe}" already exists`);
     }
 
-    if (this.buckets.size >= this.maxRepls)
-      throw Error(`maximum active repls reached (limit: ${this.maxRepls})`)
+    if (this.buckets.size >= this.maxRepls) {
+      throw Error(`maximum active repls reached (limit: ${this.maxRepls})`);
+    }
 
-    const child = new NuMcpChild("repl")
+    const child = new NuMcpChild("repl");
     const entry: BucketEntry = {
       child,
       mutex: new Mutex(),
       buffer: [],
       envelope: { kind: "empty" },
-    }
+    };
     // Prune the bucket when its child dies (crash or external kill). Guard
     // against a spawn-with-same-key race: only delete if the current map
     // entry is still the one we registered.
     child.onExit(() => {
       if (this.buckets.get(safe) === entry) {
-        this.buckets.delete(safe)
+        this.buckets.delete(safe);
       }
-    })
-    this.buckets.set(safe, entry)
-    return child
+    });
+    this.buckets.set(safe, entry);
+    return child;
   }
 
   /** True if a bucket with this key is registered. */
   has(key: string): boolean {
-    return this.buckets.has(key)
+    return this.buckets.has(key);
   }
 
   /** Get the child for a bucket, or undefined. */
   get(key: string): NuMcpChild | undefined {
-    return this.buckets.get(key)?.child
+    return this.buckets.get(key)?.child;
   }
 
   /** Snapshot of registered bucket keys. */
   list(): string[] {
-    return [...this.buckets.keys()]
+    return [...this.buckets.keys()];
   }
 
   /**
@@ -198,9 +199,9 @@ export class NuMcpPool {
     args: object,
     opts?: { record?: boolean },
   ): Promise<{ response: NuMcpToolResponse; envelope: EvaluateEnvelope }> {
-    const entry = this.buckets.get(key)
-    if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    const release = await entry.mutex.acquire()
+    const entry = this.buckets.get(key);
+    if (!entry) throw new Error(`bucket "${key}" does not exist`);
+    const release = await entry.mutex.acquire();
     try {
       // Re-check after acquiring the mutex: a concurrent clear("all") could
       // have replaced the bucket under the same key while we waited, and a
@@ -210,15 +211,15 @@ export class NuMcpPool {
       // and preserves "kill/clear wins" semantics for queued callers
       // (Copilot 3295712482).
       if (this.buckets.get(key) !== entry) {
-        throw new Error(`bucket "${key}" was replaced or killed while waiting`)
+        throw new Error(`bucket "${key}" was replaced or killed while waiting`);
       }
-      const response = await entry.child.callTool(toolName, args)
-      const record = opts?.record !== false
+      const response = await entry.child.callTool(toolName, args);
+      const record = opts?.record !== false;
       if (record) {
         // Push to ring buffer head; evict the tail past RING_BUFFER_SIZE.
-        entry.buffer.unshift(response)
+        entry.buffer.unshift(response);
         if (entry.buffer.length > RING_BUFFER_SIZE) {
-          entry.buffer.length = RING_BUFFER_SIZE
+          entry.buffer.length = RING_BUFFER_SIZE;
         }
       }
       // Update envelope cache only when fields are present (e.g. `evaluate`).
@@ -227,15 +228,15 @@ export class NuMcpPool {
       // `{kind: "ok"}` parse promotes the cache to `ok`, preserving prior
       // history_index / timestamp when the new parse omits them.
       if (toolName === "evaluate" && !response.isError) {
-        const parsed = parseEvaluateEnvelope(response.text)
+        const parsed = parseEvaluateEnvelope(response.text);
         if (parsed.kind === "ok") {
-          const prior = entry.envelope.kind === "ok" ? entry.envelope : undefined
+          const prior = entry.envelope.kind === "ok" ? entry.envelope : undefined;
           entry.envelope = {
             kind: "ok",
             cwd: parsed.cwd,
             historyIndex: parsed.historyIndex ?? prior?.historyIndex,
             timestamp: parsed.timestamp ?? prior?.timestamp,
-          }
+          };
         }
       }
       // Snapshot the envelope while still holding the mutex so the caller
@@ -243,18 +244,17 @@ export class NuMcpPool {
       // the mutex is released. Explicit per-variant copy preserves the
       // discriminator narrowing (vs. a bare spread, which is technically
       // sound under strict TS but obscures intent).
-      const envelope: EvaluateEnvelope =
-        entry.envelope.kind === "ok"
-          ? {
-              kind: "ok",
-              cwd: entry.envelope.cwd,
-              historyIndex: entry.envelope.historyIndex,
-              timestamp: entry.envelope.timestamp,
-            }
-          : { kind: "empty" }
-      return { response, envelope }
+      const envelope: EvaluateEnvelope = entry.envelope.kind === "ok"
+        ? {
+          kind: "ok",
+          cwd: entry.envelope.cwd,
+          historyIndex: entry.envelope.historyIndex,
+          timestamp: entry.envelope.timestamp,
+        }
+        : { kind: "empty" };
+      return { response, envelope };
     } finally {
-      release()
+      release();
     }
   }
 
@@ -263,37 +263,37 @@ export class NuMcpPool {
    * never been called. Throws if the bucket does not exist.
    */
   lastResponse(key: string): NuMcpToolResponse | null {
-    const entry = this.buckets.get(key)
-    if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    return entry.buffer[0] ?? null
+    const entry = this.buckets.get(key);
+    if (!entry) throw new Error(`bucket "${key}" does not exist`);
+    return entry.buffer[0] ?? null;
   }
 
   /** Empty the ring buffer for a bucket without touching the child. */
   clearBuffer(key: string): void {
-    const entry = this.buckets.get(key)
-    if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    entry.buffer.length = 0
+    const entry = this.buckets.get(key);
+    if (!entry) throw new Error(`bucket "${key}" does not exist`);
+    entry.buffer.length = 0;
   }
 
   /** Snapshot of the envelope cache for a bucket. */
   envelope(key: string): EvaluateEnvelope {
-    const entry = this.buckets.get(key)
-    if (!entry) throw new Error(`bucket "${key}" does not exist`)
+    const entry = this.buckets.get(key);
+    if (!entry) throw new Error(`bucket "${key}" does not exist`);
     return entry.envelope.kind === "ok"
       ? {
-          kind: "ok",
-          cwd: entry.envelope.cwd,
-          historyIndex: entry.envelope.historyIndex,
-          timestamp: entry.envelope.timestamp,
-        }
-      : { kind: "empty" }
+        kind: "ok",
+        cwd: entry.envelope.cwd,
+        historyIndex: entry.envelope.historyIndex,
+        timestamp: entry.envelope.timestamp,
+      }
+      : { kind: "empty" };
   }
 
   /** Test-only: inspect the full ring buffer contents (head-first). */
   _inspectBuffer(key: string): NuMcpToolResponse[] {
-    const entry = this.buckets.get(key)
-    if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    return [...entry.buffer]
+    const entry = this.buckets.get(key);
+    if (!entry) throw new Error(`bucket "${key}" does not exist`);
+    return [...entry.buffer];
   }
 
   /**
@@ -302,28 +302,28 @@ export class NuMcpPool {
    * and respawns it under the same key — wipes session state entirely.
    */
   async clear(key: string, mode: "all" | "buffer"): Promise<void> {
-    const entry = this.buckets.get(key)
-    if (!entry) throw new Error(`bucket "${key}" does not exist`)
-    const release = await entry.mutex.acquire()
+    const entry = this.buckets.get(key);
+    if (!entry) throw new Error(`bucket "${key}" does not exist`);
+    const release = await entry.mutex.acquire();
     try {
       // Re-check that this entry is still the current one. A concurrent
       // clear("all") on the same key could have already killed this entry
       // and spawned a replacement while we waited for the mutex.
       if (this.buckets.get(key) !== entry) {
         // Work already satisfied by the concurrent caller — nothing to do.
-        return
+        return;
       }
       if (mode === "buffer") {
-        entry.buffer.length = 0
-        return
+        entry.buffer.length = 0;
+        return;
       }
       // mode === "all": kill + spawn while holding the bucket mutex so no
       // concurrent call() can interleave with child replacement.
-      entry.child.kill()
+      entry.child.kill();
       // After kill(), the map entry is gone. spawn() re-creates everything.
-      this.spawn(key)
+      this.spawn(key);
     } finally {
-      release()
+      release();
     }
   }
 
@@ -336,15 +336,15 @@ export class NuMcpPool {
    * always receives a result even when the child has died.
    */
   async status(key: string): Promise<BucketStatus> {
-    const entry = this.buckets.get(key)
-    if (!entry) throw new Error(`bucket "${key}" does not exist`)
+    const entry = this.buckets.get(key);
+    if (!entry) throw new Error(`bucket "${key}" does not exist`);
     try {
       const { response: probe, envelope } = await this.call(
         key,
         "evaluate",
         { input: "$env | columns" },
         { record: false },
-      )
+      );
       if (probe.isError) {
         // Probe call succeeded at the transport level but upstream tool
         // reported an error — surface as probe-error so callers see the
@@ -354,26 +354,29 @@ export class NuMcpPool {
         // probe.text here unconditionally — that was a latent bug:
         // accidental matches of `output:"[...]"` would have populated
         // envKeys from error text.
-        const cached = entry.envelope
-        const cachedEnvelope: EvaluateEnvelope =
-          cached.kind === "ok"
-            ? {
-                kind: "ok",
-                cwd: cached.cwd,
-                historyIndex: cached.historyIndex,
-                timestamp: cached.timestamp,
-              }
-            : { kind: "empty" }
-        return { kind: "probe-error", probeError: probe.errorText, cachedEnvelope }
+        const cached = entry.envelope;
+        const cachedEnvelope: EvaluateEnvelope = cached.kind === "ok"
+          ? {
+            kind: "ok",
+            cwd: cached.cwd,
+            historyIndex: cached.historyIndex,
+            timestamp: cached.timestamp,
+          }
+          : { kind: "empty" };
+        return {
+          kind: "probe-error",
+          probeError: probe.errorText,
+          cachedEnvelope,
+        };
       }
       // `$env | columns` returns a list rendered as `output:"[KEY1,KEY2,...]"`.
-      let envKeys: string[] = []
-      const match = probe.text.match(/output:"\[([^\]]*)\]"/)
+      let envKeys: string[] = [];
+      const match = probe.text.match(/output:"\[([^\]]*)\]"/);
       if (match?.[1]) {
         envKeys = match[1]
           .split(",")
           .map((s) => s.trim())
-          .filter(Boolean)
+          .filter(Boolean);
       }
       // Return the post-probe envelope; the probe both increments
       // history_index and is the freshest snapshot of cwd / timestamp.
@@ -384,9 +387,9 @@ export class NuMcpPool {
           historyIndex: envelope.historyIndex,
           timestamp: envelope.timestamp,
           envKeys,
-        }
+        };
       }
-      return { kind: "ok", envKeys }
+      return { kind: "ok", envKeys };
     } catch (err) {
       // Side-channel probe failed — surface as probe-error rather than
       // throwing. Carry the cached envelope from before the failed probe
@@ -394,18 +397,17 @@ export class NuMcpPool {
       // the cache off the captured `entry` reference (not a fresh map
       // lookup) so a child death that pruned the bucket between probe
       // start and probe failure does not erase the cached envelope.
-      const probeError = err instanceof Error ? err.message : String(err)
-      const cached = entry.envelope
-      const cachedEnvelope: EvaluateEnvelope =
-        cached.kind === "ok"
-          ? {
-              kind: "ok",
-              cwd: cached.cwd,
-              historyIndex: cached.historyIndex,
-              timestamp: cached.timestamp,
-            }
-          : { kind: "empty" }
-      return { kind: "probe-error", probeError, cachedEnvelope }
+      const probeError = err instanceof Error ? err.message : String(err);
+      const cached = entry.envelope;
+      const cachedEnvelope: EvaluateEnvelope = cached.kind === "ok"
+        ? {
+          kind: "ok",
+          cwd: cached.cwd,
+          historyIndex: cached.historyIndex,
+          timestamp: cached.timestamp,
+        }
+        : { kind: "empty" };
+      return { kind: "probe-error", probeError, cachedEnvelope };
     }
   }
 
@@ -437,40 +439,40 @@ export class NuMcpPool {
    * `spawn` instead of calling `clear("all")` on a stuck bucket.
    */
   async kill(key: string): Promise<boolean> {
-    const entry = this.buckets.get(key)
-    if (!entry) return false
+    const entry = this.buckets.get(key);
+    if (!entry) return false;
     // Sync: child.kill() drains pending handlers (each rejects with
     // "nu --mcp client killed") and fires onExit which prunes the map
     // entry. The in-flight callTool in pool.call rejects in the same tick,
     // releasing the mutex so our await below resolves promptly.
-    entry.child.kill()
+    entry.child.kill();
     // Drain the mutex for ordering with concurrent clear("all") — that
     // path's re-check (`this.buckets.get(key) !== entry`) sees the pruned
     // entry and skips its respawn, so kill wins over concurrent clear.
-    const release = await entry.mutex.acquire()
+    const release = await entry.mutex.acquire();
     try {
       // onExit already deleted the entry; defensive no-op delete here in
       // case onExit fired without doing the delete for any reason.
-      if (this.buckets.get(key) === entry) this.buckets.delete(key)
-      return true
+      if (this.buckets.get(key) === entry) this.buckets.delete(key);
+      return true;
     } finally {
-      release()
+      release();
     }
   }
 
   /** Kill every bucket; returns the count killed. */
   nukeAll(): number {
-    let n = 0
+    let n = 0;
     for (const [key, entry] of this.buckets) {
-      entry.child.kill()
-      this.buckets.delete(key)
-      n += 1
+      entry.child.kill();
+      this.buckets.delete(key);
+      n += 1;
     }
-    return n
+    return n;
   }
 }
 
-let singletonPool: NuMcpPool | null = null
+let singletonPool: NuMcpPool | null = null;
 
 /**
  * Process-wide singleton pool. `nu.ts:killAll()` and the REPL MCP tools
@@ -478,6 +480,6 @@ let singletonPool: NuMcpPool | null = null
  * should construct `new NuMcpPool()` directly instead.
  */
 export function getReplPool(): NuMcpPool {
-  if (!singletonPool) singletonPool = new NuMcpPool()
-  return singletonPool
+  if (!singletonPool) singletonPool = new NuMcpPool();
+  return singletonPool;
 }
