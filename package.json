@@ -15,7 +15,8 @@
         "dev": "bun --silent run src/index.ts",
         "build": "bun --silent build src/index.ts --target=bun --outdir=dist && cp config/config.nu dist",
         "test": "bun test",
-        "check": "bunx tsc --noEmit && bun test --bail"
+        "check": "bunx tsc --noEmit && bun test --bail",
+        "postinstall": "./scripts/install-nupm-modules.nu"
     },
     "keywords": [
         "mcp",
@@ -26,10 +27,7 @@
         "documentation"
     ],
     "license": "MIT",
-    "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.28.0",
-        "zod": "^3.25.76"
-    },
+    "dependencies": { "@modelcontextprotocol/sdk": "^1.28.0", "zod": "^3.25.76" },
     "devDependencies": {
         "@types/node": "^25.9.1",
         "bun-types": "^1.3.14",
