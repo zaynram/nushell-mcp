@@ -1,0 +1,166 @@
+version = '3.0.0'
+
+[issue]
+    name   = 'PATHEXT dropped in Nushell env'
+    slug   = 'pathext-omission'
+    date   = "2026-07-14"
+    status = "open"
+
+    [issue.vision]
+        outcome = 'singular'
+
+        [[issue.vision.output]]
+            purpose = 'A patched environment builder in nushell-mcp that preserves Windows-essential variables (PATHEXT and peers) across all layering modes'
+            path    = 'src/env.ts'
+
+        [[issue.vision.output]]
+            purpose = 'Test suite with regression coverage for the patched environment builder'
+            path    = 'test/env.test.ts'
+
+        [[issue.vision.output]]
+            purpose = 'Verification that the patched version bump was deployed to NPM.'
+            path    = 'https://www.npmjs.com/package/nushell-mcp/v/0.2.4'
+
+        [issue.vision.criteria]
+            requirements = [
+                'Bare-name external command resolution succeeds in Nushell executions on Windows without caller-supplied env overrides.',
+                'PATHEXT and peer Windows-essential variables (SYSTEMROOT, COMSPEC, TEMP, TMP) survive the default, env-layered, and cleanEnv construction paths.',
+                'Regression tests assert per-platform presence of essential variables and bare-name resolution of a known binary.',
+                'Patch released to npm with a changelog entry documenting the resolution semantics.',
+            ]
+            constraints  = [
+                'cleanEnv mode must not leak host environment beyond the explicit essential allowlist.',
+                'Behavior on POSIX hosts must remain unchanged; the allowlist is Windows-conditional.',
+            ]
+
+        [issue.vision.landscape]
+            external = [
+                "Resolution is delegated to the OS model: both where.exe and nu's which expand extensionless names via PATHEXT, so no shell-side mitigation exists when the variable is absent.",
+                'Empirical reproduction (2026-07-13): bare resolution failed while explicit .exe suffix, wildcard, and per-call PATHEXT injection each succeeded across which, where.exe, and direct execution.',
+            ]
+
+            [[issue.vision.landscape.internal]]
+                type            = 'brownfield'
+                synopsis        = 'Nushell child environment construction in nushell-mcp (default, env, bashEnv, and cleanEnv layering).'
+                reference       = 'https://github.com/zaynram/nushell-mcp'
+                incompatibility = "Omits PATHEXT on Windows, breaking extensionless external-command resolution for both nu's which and where.exe despite the correct directory being present on PATH."
+
+            [[issue.vision.landscape.internal]]
+                type     = 'greenfield'
+                synopsis = 'A Windows-essential variable allowlist and platform-conditional preservation policy; no prior structure exists for either.'
+
+        [[issue.vision.scope.excluded]]
+            item     = 'bashEnv variable capture semantics'
+            deferred = false
+
+        [[issue.vision.scope.excluded]]
+            item     = 'Windows PATH case normalization quirks'
+            deferred = false
+
+    [issue.bindings]
+        [[issue.bindings.xvalue]]
+            type = 'practice-fidelity'
+            item = 'Restores parity between documented tool behavior and actual Windows runtime, keeping nu-fluency skills and hooks truthful about nu-lint availability.'
+
+        [[issue.bindings.xvalue]]
+            type = 'gap-closure'
+            item = 'Unblocks deterministic nu-lint invocation from Claude Desktop on Windows, the environment where the plugin and MCP pair run outside claude-code.'
+
+        [[issue.bindings.xvalue]]
+            type = 'precomputed-context'
+            item = 'Encodes the two-resolver diagnosis (which plus where.exe) and per-call workaround so future Windows environment bugs start from a verified causal chain.'
+
+        [[issue.bindings.xabort]]
+            action = 'reevaluate'
+
+            [issue.bindings.xabort.trigger]
+                mode       = 'OR'
+                conditions = [
+                    'Upstream Nushell resolves extensionless names without consulting PATHEXT',
+                    'The env builder is rewritten wholesale under a separate refactor issue',
+                ]
+
+[issue.reference]
+branch = "pathext-omission"
+url = "https://github.com/zaynram/nushell-mcp/issues/2"
+index = 2
+
+[tasks.1]
+    id        = 'repro-fixture'
+    target    = 'Encode the minimal reproduction as an executable, currently-failing test fixture before any fix is written.'
+    completed = false
+
+    [[tasks.1.subtasks]]
+        synopsis = 'Extract repro pipeline from chat transcript'
+        llm      = 'augmentation'
+        done     = false
+
+    [[tasks.1.subtasks]]
+        synopsis = 'Write failing PATHEXT regression test'
+        llm      = 'augmentation'
+        done     = false
+
+    [[tasks.1.subtasks]]
+        synopsis = 'Confirm test fails on current main'
+        llm      = 'automation'
+        done     = false
+
+[tasks.2]
+    id        = 'essential-allowlist'
+    target    = 'Define the Windows-essential variable allowlist and its precedence across the default, env-layered, and cleanEnv construction modes.'
+    completed = false
+
+    [[tasks.2.subtasks]]
+        synopsis = 'Survey Windows-essential env variables'
+        llm      = 'augmentation'
+        done     = false
+
+    [[tasks.2.subtasks]]
+        synopsis = 'Decide cleanEnv preservation policy'
+        llm      = 'none'
+        done     = false
+
+    [[tasks.2.subtasks]]
+        synopsis = 'Record decision in MADR draft'
+        llm      = 'augmentation'
+        done     = false
+
+[tasks.3]
+    id        = 'env-builder-patch'
+    target    = 'Patch the Nushell environment builder to apply the allowlist platform-conditionally, with test coverage across layering modes.'
+    completed = false
+
+    [[tasks.3.subtasks]]
+        synopsis = 'Implement allowlist in env builder'
+        llm      = 'augmentation'
+        done     = false
+
+    [[tasks.3.subtasks]]
+        synopsis = 'Cover env and cleanEnv paths with tests'
+        llm      = 'augmentation'
+        done     = false
+
+    [[tasks.3.subtasks]]
+        synopsis = 'Verify POSIX behavior unchanged'
+        llm      = 'automation'
+        done     = false
+
+[tasks.4]
+    id        = 'release-patch'
+    target    = 'Ship the fix as an npm patch release with changelog documentation of the resolution semantics.'
+    completed = false
+
+    [[tasks.4.subtasks]]
+        synopsis = 'Write changelog entry'
+        llm      = 'augmentation'
+        done     = false
+
+    [[tasks.4.subtasks]]
+        synopsis = 'Bump version and publish patch release'
+        llm      = 'none'
+        done     = false
+
+    [[tasks.4.subtasks]]
+        synopsis = 'Verify fix in live Claude Desktop session'
+        llm      = 'augmentation'
+        done     = false
