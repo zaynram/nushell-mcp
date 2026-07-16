@@ -3,7 +3,7 @@ version = '3.0.0'
 [issue]
     name   = 'PATHEXT dropped in Nushell env'
     slug   = 'pathext-omission'
-    date   = "2026-07-14"
+    date   = 2026-07-14
     status = "open"
 
     [issue.vision]
