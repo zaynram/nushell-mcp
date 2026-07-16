@@ -82,7 +82,9 @@ server.registerTool(
             'independent (no implicit session): pass `cwd`/`env` per call. ' +
             'For cross-call session state (let, $env, cwd), use the ' +
             '`nu_repl_*` family instead. Pass `input` to feed a dataset ' +
-            'into the pipeline as `$in`. Import a bash-style environment ' +
+            'into the pipeline as `$in`. Pass `includeDirs` to add module ' +
+            'search paths so `use` resolves modules by name. Import a ' +
+            'bash-style environment ' +
             'with `bashEnv` (script runs via WSL/Git Bash/bash; exported ' +
             "vars merge into nu's env for this call). For large results, " +
             'slice inside the pipeline (e.g. `... | first 50`).',
@@ -108,6 +110,18 @@ server.registerTool(
                 .describe(
                     'Working directory to run the pipeline in. Interpreted by ' +
                         'the host OS this server is running on.'
+                ),
+            includeDirs: z
+                .array(z.string().min(1))
+                .optional()
+                .describe(
+                    'Module search directories for this call, passed to nu ' +
+                        'via `--include-path`. Entries are prepended to the ' +
+                        'default NU_LIB_DIRS in the given order and take ' +
+                        'search precedence — the default search path is ' +
+                        'extended, never replaced. Lets `use` resolve ' +
+                        'bare-name and ./-relative modules regardless of ' +
+                        "the generated script file's location."
                 ),
             env: z
                 .record(z.string())
@@ -185,6 +199,7 @@ server.registerTool(
         pipeline,
         input,
         cwd,
+        includeDirs,
         env,
         cleanEnv,
         timeoutMs,
@@ -196,6 +211,7 @@ server.registerTool(
             const result: PipelineResult = await runPipeline(pipeline, {
                 input,
                 cwd,
+                includeDirs,
                 env,
                 cleanEnv,
                 timeoutMs,
