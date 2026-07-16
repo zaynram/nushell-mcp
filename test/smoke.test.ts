@@ -19,7 +19,9 @@ import {
  * Run with: bun test
  */
 import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // Use the OS temp dir instead of a hardcoded "/tmp" so the cwd / status
 // portability assertions stay valid across Linux, macOS, and Windows
@@ -952,4 +954,81 @@ describe('MCP server wiring', () => {
             proc.kill()
         }
     }, 30_000)
+})
+
+describe('includeDirs (-I) module search', () => {
+    // Each test builds a throwaway module dir, so resolution can only succeed
+    // through --include-path — never via cwd or the generated script's own
+    // location (both point elsewhere).
+    const moduleDirs: string[] = []
+    async function makeModule(body: string): Promise<string> {
+        const dir = await mkdtemp(join(TMP_DIR, 'nushell-mcp-incdirs-'))
+        moduleDirs.push(dir)
+        await Bun.write(join(dir, 'sampmod', 'mod.nu'), body)
+        return dir
+    }
+
+    afterAll(async () => {
+        await Promise.allSettled(
+            moduleDirs.map(dir => rm(dir, { recursive: true, force: true }))
+        )
+    })
+
+    test('runPipeline resolves a bare-name module via includeDirs', async () => {
+        const dir = await makeModule(
+            "export def hello []: nothing -> string { 'from-sampmod' }"
+        )
+        const r = await runPipeline('use sampmod; sampmod hello', {
+            includeDirs: [dir],
+        })
+        expect(r.exitCode).toBe(0)
+        expect(r.nuon).toBe('"from-sampmod"')
+    })
+
+    test('runPipeline resolves a dot-relative module via includeDirs', async () => {
+        const dir = await makeModule(
+            "export def hello []: nothing -> string { 'dot-relative' }"
+        )
+        const r = await runPipeline('use ./sampmod; sampmod hello', {
+            includeDirs: [dir],
+        })
+        expect(r.exitCode).toBe(0)
+        expect(r.nuon).toBe('"dot-relative"')
+    })
+
+    test('runRaw resolves a bare-name module via includeDirs', async () => {
+        const dir = await makeModule(
+            "export def hello []: nothing -> string { 'raw-sampmod' }"
+        )
+        const r = await runRaw('use sampmod; sampmod hello', {
+            includeDirs: [dir],
+        })
+        expect(r.exitCode).toBe(0)
+        expect(r.stdout).toContain('raw-sampmod')
+    })
+
+    test('earlier includeDirs entries take search precedence', async () => {
+        const first = await makeModule(
+            "export def hello []: nothing -> string { 'first-dir' }"
+        )
+        const second = await makeModule(
+            "export def hello []: nothing -> string { 'second-dir' }"
+        )
+        const r = await runPipeline('use sampmod; sampmod hello', {
+            includeDirs: [first, second],
+        })
+        expect(r.exitCode).toBe(0)
+        expect(r.nuon).toBe('"first-dir"')
+    })
+
+    test('omitting includeDirs leaves resolution unchanged', async () => {
+        // The module exists on disk but is never passed, so the parser must
+        // still fail to find it — proving no dir leaks in by default.
+        await makeModule(
+            "export def hello []: nothing -> string { 'unreachable' }"
+        )
+        const r = await runPipeline('use sampmod; sampmod hello', {})
+        expect(r.exitCode).not.toBe(0)
+        expect(r.stderr).toContain('Module not found')
+    })
 })

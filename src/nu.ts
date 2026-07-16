@@ -39,6 +39,13 @@ export interface RunOptions {
     env?: Record<string, string>
     /** Use only `env` instead of extending the server's environment. */
     cleanEnv?: boolean
+    /**
+     * Per-call module search directories, passed to `nu` via
+     * `--include-path`. Entries are prepended to the default `NU_LIB_DIRS`
+     * in the given order and take search precedence — the default search
+     * path is extended, never replaced.
+     */
+    includeDirs?: string[]
     /** Kill the process after this many ms. Defaults to `DEFAULT_TIMEOUT_MS`. */
     timeoutMs?: number
     /**
@@ -88,7 +95,13 @@ async function spawnNu(argv: string[], opts: RunOptions): Promise<RawResult> {
         ? (opts.env ?? {})
         : { ...process.env, ...opts.env }
     const timeoutMs = opts.timeoutMs ?? vars.TIMEOUT_MS
-    const proc = Bun.spawn(NU_COMMAND.concat(argv), {
+    // Multiple search dirs pack into one flag value: nu splits on the record
+    // separator (char record_sep, 0x1e) and prepends them to the default
+    // NU_LIB_DIRS in order.
+    const include = opts.includeDirs?.length
+        ? ['--include-path', opts.includeDirs.join('\x1e')]
+        : []
+    const proc = Bun.spawn(NU_COMMAND.concat(include, argv), {
         cwd: opts.cwd,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -588,6 +601,7 @@ export async function runPipeline(
             cwd: opts.cwd,
             env,
             cleanEnv: opts.cleanEnv,
+            includeDirs: opts.includeDirs,
             timeoutMs: opts.timeoutMs,
         })
         const [nuon, resultType] = await Promise.all([
