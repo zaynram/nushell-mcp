@@ -1,0 +1,134 @@
+version = '3.0.0'
+
+[issue]
+  name    = 'includeDirs (-I) exec parameter'
+  slug    = 'include-dirs'
+  date    = 2026-07-16
+  status  = 'open'
+  extends = ['docs/issues/run-raw-routing.issue.toml']
+
+  [issue.vision]
+    outcome = 'singular'
+
+    [[issue.vision.output]]
+      purpose = 'RunOptions gains includeDirs; spawnNu translates it to nu --include-path with record-separator-joined entries'
+      path    = 'src/nu.ts'
+
+    [[issue.vision.output]]
+      purpose = 'nu_exec tool schema and description expose includeDirs with the verified prepend-with-precedence search semantics'
+      path    = 'src/index.ts'
+
+    [[issue.vision.output]]
+      purpose = 'Regression coverage: bare-name and dot-relative use imports resolve via includeDirs from both execution vehicles, with an omitted-parameter baseline'
+      path    = 'test/smoke.test.ts'
+
+    [issue.vision.criteria]
+      requirements = [
+        'nu_exec accepts an optional includeDirs list; entries are passed to nu via --include-path so bare-name and dot-relative use imports resolve regardless of where the executing script file lives.',
+        'Multiple directories are joined with the record separator character and prepended to the default NU_LIB_DIRS in caller order, taking search precedence.',
+        'The tool description documents the prepend-with-precedence semantics: includeDirs extends the default search path, it does not replace it.',
+        'Both execution modes honor includeDirs identically: the structured temp-script vehicle and the raw vehicle.',
+        'Omitting includeDirs leaves current resolution behavior unchanged.',
+      ]
+      constraints  = [
+        'No new state: includeDirs is per-call argv plumbing in spawnNu; nu_exec stays stateless.',
+        'Independent of issues #2 and #3 and may land in any order; only the raw-vehicle test leg depends on the routing from issue #3.',
+        'Every spawned subprocess stays registered in the active set with its ActiveRole tag.',
+      ]
+
+    [issue.vision.landscape]
+      external = [
+        'Resolution probes (2026-07-16, nu 0.114.1): with --include-path at the module parent, bare-name and dot-relative use resolve scope-visibly from a foreign-directory script and under -c with mismatched cwd; inside the do { } wrap imports remain callable-only.',
+        'Precedence probe: -I prepends to the default NU_LIB_DIRS (const and env mirror it) rather than replacing it, identically with and without the bundled --config; -I entries win the search order. The flag help wording ("set the NU_LIB_DIRS") is misleading.',
+        'Multi-directory probe: entries joined with char record_sep (0x1e) are prepended in caller order.',
+      ]
+
+      [[issue.vision.landscape.internal]]
+        type            = 'brownfield'
+        synopsis        = 'spawnNu builds argv as NU_COMMAND plus call arguments; RunOptions carries cwd, env, cleanEnv, timeoutMs, and input.'
+        reference       = 'src/nu.ts'
+        incompatibility = 'No parameter maps to --include-path, so module search paths cannot be supplied per call; imports from generated temp scripts require absolute paths.'
+
+      [[issue.vision.landscape.internal]]
+        type     = 'greenfield'
+        synopsis = 'A per-call include-path surface on the exec tool; no prior parameter or plumbing exists.'
+
+    [[issue.vision.scope.excluded]]
+      item     = 'REPL pool (nu_repl_*) include-path support'
+      deferred = false
+
+    [[issue.vision.scope.excluded]]
+      item     = 'Scope visibility inside the do-wrap'
+      deferred = 'run-based-structured-wrap'
+
+    [[issue.vision.scope.excluded]]
+      item     = 'Server-configured default include paths'
+      deferred = false
+
+  [issue.bindings]
+    [[issue.bindings.xvalue]]
+      type = 'gap-closure'
+      item = 'Gives one-shot executions a per-call module search path, removing the absolute-path requirement for imports from generated temp scripts — the only such mechanism available to structured mode.'
+
+    [[issue.bindings.xvalue]]
+      type = 'effort-leverage'
+      item = 'One argv parameter serves every execution vehicle — structured, raw, and the prospective run-based wrap — without touching env layering or routing.'
+
+    [[issue.bindings.xvalue]]
+      type = 'precomputed-context'
+      item = 'Encodes the verified prepend-with-precedence and record-separator semantics so implementation and documentation start from probed facts rather than the misleading flag help.'
+
+    [[issue.bindings.xabort]]
+      action = 'reevaluate'
+
+      [issue.bindings.xabort.trigger]
+        mode       = 'OR'
+        conditions = [
+          'Upstream Nushell changes --include-path semantics or retires NU_LIB_DIRS in a way that breaks per-call injection',
+          'The exec surface is redesigned so module resolution is owned by a different mechanism',
+        ]
+
+  [issue.reference]
+    url    = 'https://github.com/zaynram/nushell-mcp/issues/4'
+    branch = 'include-dirs'
+    index  = 4
+
+[tasks.1]
+  id        = 'param-plumbing'
+  target    = 'Add includeDirs to RunOptions and spawnNu argv construction, exposed through the nu_exec tool schema with the prepend-with-precedence semantics documented.'
+  completed = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Add includeDirs to RunOptions and spawnNu'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Expose parameter in nu_exec schema'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Document prepend semantics in description'
+    llm      = 'automation'
+    done     = false
+
+[tasks.2]
+  id        = 'coverage'
+  target    = 'Regression coverage for bare-name and dot-relative imports via includeDirs across both vehicles, including the unchanged-when-omitted baseline.'
+  completed = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Cover temp-script vehicle imports'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Cover raw vehicle imports'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Assert omitted-parameter baseline'
+    llm      = 'automation'
+    done     = false
