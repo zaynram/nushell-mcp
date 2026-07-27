@@ -64,7 +64,7 @@ server.registerTool(
         title: 'Run a one-shot Nushell pipeline',
         description:
             'Evaluate Nushell code in a one-shot pipeline. The `nu` process ' +
-            'is spawned on the host machine (no sandbox) with a fresh environment and ' +
+            'is spawned on the host machine (no sandbox) with environment inherited from the host by default (use `cleanEnv` to avoid that), and ' +
             'process state on every invocation (no implicit session). Output is returned ' +
             "in it's rendered and serialized forms, along with its native Nushell type(s)." +
             'For cross-call session state, use the `nu_repl_*` tool family instead. Use ' +
