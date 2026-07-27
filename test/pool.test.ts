@@ -180,9 +180,9 @@ describe('NuMcpPool — Cycle 4: per-bucket serialization in pool.call', () => {
     test('call on a missing bucket errors', async () => {
         const p = new NuMcpPool()
         try {
-            expect(p.call('nope', 'evaluate', { input: '1' })).rejects.toThrow(
-                /does not exist|missing|not found/i
-            )
+            await expect(
+                p.call('nope', 'evaluate', { input: '1' })
+            ).rejects.toThrowErrorMatchingInlineSnapshot(`"bucket "nope" does not exist"`)
         } finally {
             p.nukeAll()
         }
@@ -283,9 +283,9 @@ describe('NuMcpPool — Cycle 4: per-bucket serialization in pool.call', () => {
             // JSON-RPC response still completes, so the mutex must release.
             // (We also cover the throw path by directly testing the thrown-error
             // case via a missing tool name.)
-            expect(
+            await expect(
                 p.call('rej', 'this-tool-does-not-exist', { input: '1' })
-            ).rejects.toThrow()
+            ).rejects.toThrowErrorMatchingInlineSnapshot(`"tool not found (code -32602)"`)
 
             // If mutex leaked, this hangs forever; bun test will time out.
             const { response: r } = await p.call('rej', 'evaluate', { input: '42' })

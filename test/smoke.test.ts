@@ -255,8 +255,10 @@ describe('audit regressions', () => {
 
     test('bashEnv surfaces stderr on prelude failure', async () => {
         if (!(await bashRuntimeAvailable())) return
-        expect(loadBashEnv('echo problem >&2; exit 17')).rejects.toThrow(
-            /exit 17|problem/i
+        await expect(
+            loadBashEnv('echo problem >&2; exit 17')
+        ).rejects.toThrowErrorMatchingInlineSnapshot(
+            `"bashEnv prelude failed (exit 17): problem"`
         )
     }, 20_000)
 
@@ -281,8 +283,10 @@ describe('second-pass audit', () => {
     test('bashEnv honors opts.timeoutMs', async () => {
         if (!(await bashRuntimeAvailable())) return
         const start = Date.now()
-        expect(loadBashEnv('sleep 5', { timeoutMs: 800 })).rejects.toThrow(
-            /timed out after 800ms/
+        await expect(
+            loadBashEnv('sleep 5', { timeoutMs: 800 })
+        ).rejects.toThrowErrorMatchingInlineSnapshot(
+            `"bashEnv prelude timed out after 800ms"`
         )
         const elapsed = Date.now() - start
         // Generous bound: the timeout kicks in well under the 5s sleep.
@@ -296,8 +300,10 @@ describe('second-pass audit', () => {
         // same timed-out error inside the configured deadline. The MCP
         // layer's try/catch converts this into an isError response.
         const start = Date.now()
-        expect(runPipeline('1', { bashEnv: 'sleep 5', timeoutMs: 800 })).rejects.toThrow(
-            /timed out after 800ms/
+        await expect(
+            runPipeline('1', { bashEnv: 'sleep 5', timeoutMs: 800 })
+        ).rejects.toThrowErrorMatchingInlineSnapshot(
+            `"bashEnv prelude timed out after 800ms"`
         )
         const elapsed = Date.now() - start
         expect(elapsed).toBeLessThan(3000)
@@ -340,11 +346,12 @@ describe('cycle 2 audit regressions', () => {
         const prevOverride = process.env.NUSHELL_MCP_BASH_PATH
         // Reset memo so the fresh env-var value is probed, not a cached result.
         _resetBashRunnerProbe()
-        process.env.NUSHELL_MCP_BASH_PATH = '/nonexistent/path/that/does/not/exist/bash'
+        process.env.NUSHELL_MCP_BASH_PATH = '/nonexistent/path/to/bash'
         try {
-            expect(loadBashEnv('export CYCLE2_C1_TEST=should-not-run')).rejects.toThrow(
-                /NUSHELL_MCP_BASH_PATH=.*did not pass probe/
-            )
+            await expect(
+                loadBashEnv('export CYCLE2_C1_TEST=should-not-run')
+            ).rejects.toThrowErrorMatchingInlineSnapshot(
+                `"NUSHELL_MCP_BASH_PATH=/nonexistent/path/to/bash did not pass probe; ensure a valid bash runtime exists and is on PATH."`)
         } finally {
             // Restore env and reset memo so downstream tests are unaffected.
             if (prevOverride === undefined) {
