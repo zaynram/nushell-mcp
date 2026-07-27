@@ -493,7 +493,7 @@ describe('MCP server wiring', () => {
         }
     }, 20_000)
 
-    // --- Plan B Cycle 7: REPL lifecycle tools ----------------------------
+    // ---  REPL lifecycle tools ----------------------------
     test('nu_repl_spawn / nu_repl_list / nu_repl_kill / nu_repl_nuke', async () => {
         const proc = Bun.spawn(['bun', `${import.meta.dir}/../src/index.ts`], {
             stdin: 'pipe',
@@ -603,7 +603,7 @@ describe('MCP server wiring', () => {
             const r10 = await call('nu_repl_list')
             expect(r10.result.structuredContent?.keys).toEqual([])
 
-            // --- Plan B Cycle 8: nu_repl_write -------------------
+            // ---  nu_repl_write -------------------
             // Spawn a fresh bucket, write `let x = 42`, write `$x`,
             // confirm second response carries the value.
             await call('nu_repl_spawn', { key: 'writebench' })
@@ -622,7 +622,7 @@ describe('MCP server wiring', () => {
             })
             expect(wErr.result.isError).toBe(true)
 
-            // --- Plan B Cycle 9: nu_repl_read --------------------
+            // ---  nu_repl_read --------------------
             // Fresh bucket → null lastResponse.
             await call('nu_repl_spawn', { key: 'readbench' })
             const rd0 = await call('nu_repl_read', { key: 'readbench' })
@@ -638,7 +638,7 @@ describe('MCP server wiring', () => {
             const rdErr = await call('nu_repl_read', { key: 'missing' })
             expect(rdErr.result.isError).toBe(true)
 
-            // --- Plan B Cycle 10: nu_repl_clear ------------------
+            // ---  nu_repl_clear ------------------
             // Set state, clear buffer (state remains).
             await call('nu_repl_write', { key: 'readbench', input: 'let y = 99' })
             const cb = await call('nu_repl_clear', { key: 'readbench', mode: 'buffer' })
@@ -663,7 +663,7 @@ describe('MCP server wiring', () => {
             const zLost = await call('nu_repl_write', { key: 'readbench', input: '$z' })
             expect(zLost.result.isError).toBe(true)
 
-            // --- Plan B Cycle 11: nu_repl_status -----------------
+            // --- nu_repl_status -----------------
             await call('nu_repl_spawn', { key: 'statbench' })
             await call('nu_repl_write', { key: 'statbench', input: `cd "${TMP_DIR}"` })
             const stat = await call('nu_repl_status', { key: 'statbench' })
@@ -672,14 +672,12 @@ describe('MCP server wiring', () => {
             expect(
                 (stat.result.structuredContent?.historyIndex as number) ?? 0
             ).toBeGreaterThan(0)
-            expect(
-                (stat.result.structuredContent?.envKeys as string[])?.length ?? 0
-            ).toBeGreaterThan(0)
+            expect(stat.result.structuredContent?.envKeys as string[]).not.toBeEmpty()
             // Status on a missing bucket errors.
             const statErr = await call('nu_repl_status', { key: 'no-such-key' })
             expect(statErr.result.isError).toBe(true)
 
-            // --- Plan B Cycle 12: nu_exec_abort ------------------
+            // --- nu_exec_abort ------------------
             // Fire a long-running nu_exec and abort it. Send both
             // concurrently — the abort must reach the server before
             // the run finishes its sleep.
@@ -717,7 +715,7 @@ describe('MCP server wiring', () => {
             // The killed run reports error (timedOut false, exitCode != 0).
             expect(longRes.result.isError).toBeTruthy()
 
-            // --- Plan B Cycle 15: multi-bucket isolation ---------
+            // ---  multi-bucket isolation ---------
             // Two buckets each hold their own `$a`. Writes to one
             // do not bleed into the other.
             await call('nu_repl_spawn', { key: 'iso1' })
@@ -729,7 +727,7 @@ describe('MCP server wiring', () => {
             expect((iso1.result.structuredContent?.output as string) ?? '').toContain('1')
             expect((iso2.result.structuredContent?.output as string) ?? '').toContain('2')
 
-            // --- Plan B Cycle 15: cross-bucket parallelism -------
+            // ---  cross-bucket parallelism -------
             // Two concurrent writes to different buckets should
             // overlap (per-bucket mutex; cross-bucket free-running).
             // Precondition: iso1/iso2 are already warm from the isolation
