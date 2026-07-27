@@ -255,7 +255,7 @@ describe('audit regressions', () => {
 
     test('bashEnv surfaces stderr on prelude failure', async () => {
         if (!(await bashRuntimeAvailable())) return
-        await expect(loadBashEnv('echo problem >&2; exit 17')).rejects.toThrow(
+        expect(loadBashEnv('echo problem >&2; exit 17')).rejects.toThrow(
             /exit 17|problem/i
         )
     }, 20_000)
@@ -281,7 +281,7 @@ describe('second-pass audit', () => {
     test('bashEnv honors opts.timeoutMs', async () => {
         if (!(await bashRuntimeAvailable())) return
         const start = Date.now()
-        await expect(loadBashEnv('sleep 5', { timeoutMs: 800 })).rejects.toThrow(
+        expect(loadBashEnv('sleep 5', { timeoutMs: 800 })).rejects.toThrow(
             /timed out after 800ms/
         )
         const elapsed = Date.now() - start
@@ -296,9 +296,9 @@ describe('second-pass audit', () => {
         // same timed-out error inside the configured deadline. The MCP
         // layer's try/catch converts this into an isError response.
         const start = Date.now()
-        await expect(
-            runPipeline('1', { bashEnv: 'sleep 5', timeoutMs: 800 })
-        ).rejects.toThrow(/timed out after 800ms/)
+        expect(runPipeline('1', { bashEnv: 'sleep 5', timeoutMs: 800 })).rejects.toThrow(
+            /timed out after 800ms/
+        )
         const elapsed = Date.now() - start
         expect(elapsed).toBeLessThan(3000)
     }, 10_000)
@@ -342,9 +342,9 @@ describe('cycle 2 audit regressions', () => {
         _resetBashRunnerProbe()
         process.env.NUSHELL_MCP_BASH_PATH = '/nonexistent/path/that/does/not/exist/bash'
         try {
-            await expect(
-                loadBashEnv('export CYCLE2_C1_TEST=should-not-run')
-            ).rejects.toThrow(/NUSHELL_MCP_BASH_PATH=.*did not pass probe/)
+            expect(loadBashEnv('export CYCLE2_C1_TEST=should-not-run')).rejects.toThrow(
+                /NUSHELL_MCP_BASH_PATH=.*did not pass probe/
+            )
         } finally {
             // Restore env and reset memo so downstream tests are unaffected.
             if (prevOverride === undefined) {
