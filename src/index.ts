@@ -139,7 +139,7 @@ server.registerTool(
                 .min(1)
                 .optional()
                 .describe(
-                    'Bash script evaluated through before ' +
+                    'Bash script evaluated through WSL / Git Bash / `bash` before ' +
                         'the user pipeline runs. Variables it exports (new or ' +
                         "changed vs. baseline) are merged into nu's env for this " +
                         'call. Probe order: NUSHELL_MCP_BASH_PATH override, then ' +
