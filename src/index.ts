@@ -63,15 +63,15 @@ server.registerTool(
     {
         title: 'Run a one-shot Nushell pipeline',
         description:
-            'Evaluate Nushell code in a one-shot pipeline. The `nu` process' +
-            'is spawned on the host machine (no sandbox) with a fresh environment and' +
-            'process state on every invocation (no implicit session). Output is returned' +
+            'Evaluate Nushell code in a one-shot pipeline. The `nu` process ' +
+            'is spawned on the host machine (no sandbox) with a fresh environment and ' +
+            'process state on every invocation (no implicit session). Output is returned ' +
             "in it's rendered and serialized forms, along with its native Nushell type(s)." +
-            'For cross-call session state, use the `nu_repl_*` tool family instead. Use' +
-            'the `input` parameter to feed a dataset into the pipeline as `$in`. Prepare' +
+            'For cross-call session state, use the `nu_repl_*` tool family instead. Use ' +
+            'the `input` parameter to feed a dataset into the pipeline as `$in`. Prepare ' +
             'the session environment through the `env` (environment variables),`cwd` ' +
             '(working directory), `includeDirs` (module search paths), and `bashEnv` (' +
-            'load environment from bash script into the Nushell process). For large results,' +
+            'load environment from bash script into the Nushell process). For large results, ' +
             'slice inside the pipeline (e.g. `... | first 50`).',
         inputSchema: {
             pipeline: z
