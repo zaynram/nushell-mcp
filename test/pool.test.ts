@@ -60,9 +60,7 @@ describe('NuMcpPool — basic spawn / has / list / kill', () => {
 
     test('spawning the same key twice errors', () => {
         // alpha exists from prior test
-        expect(() => pool.spawn('alpha')).toThrow(
-            /already exists|already spawned/i
-        )
+        expect(() => pool.spawn('alpha')).toThrow(/already exists|already spawned/i)
     })
 
     test('kill() removes the bucket from the map', async () => {
@@ -173,8 +171,7 @@ describe('NuMcpPool — capacity check (MAX_REPLS)', () => {
                 p.nukeAll()
             }
         } finally {
-            if (original !== undefined)
-                process.env.NUSHELL_MCP_MAX_REPLS = original
+            if (original !== undefined) process.env.NUSHELL_MCP_MAX_REPLS = original
         }
     })
 })
@@ -183,9 +180,9 @@ describe('NuMcpPool — Cycle 4: per-bucket serialization in pool.call', () => {
     test('call on a missing bucket errors', async () => {
         const p = new NuMcpPool()
         try {
-            await expect(
-                p.call('nope', 'evaluate', { input: '1' })
-            ).rejects.toThrow(/does not exist|missing|not found/i)
+            expect(p.call('nope', 'evaluate', { input: '1' })).rejects.toThrow(
+                /does not exist|missing|not found/i
+            )
         } finally {
             p.nukeAll()
         }
@@ -195,11 +192,9 @@ describe('NuMcpPool — Cycle 4: per-bucket serialization in pool.call', () => {
         const p = new NuMcpPool({ maxRepls: 2 })
         try {
             p.spawn('solo')
-            const { response: r } = await p.call('solo', 'evaluate', {
-                input: '1 + 1',
-            })
+            const { response: r } = await p.call('solo', 'evaluate', { input: '1 + 1' })
             assertOk(r)
-            expect(r.text).toContain('output:"2"')
+            expect(r.text).toContain('output:2')
         } finally {
             p.nukeAll()
         }
@@ -268,14 +263,10 @@ describe('NuMcpPool — Cycle 4: per-bucket serialization in pool.call', () => {
         const p = new NuMcpPool({ maxRepls: 1 })
         try {
             p.spawn('buf')
-            const { response: a } = await p.call('buf', 'evaluate', {
-                input: '1 + 1',
-            })
+            const { response: a } = await p.call('buf', 'evaluate', { input: '1 + 1' })
             const head1 = p.lastResponse('buf')
             expect(head1).toEqual(a)
-            const { response: b } = await p.call('buf', 'evaluate', {
-                input: '2 + 2',
-            })
+            const { response: b } = await p.call('buf', 'evaluate', { input: '2 + 2' })
             const head2 = p.lastResponse('buf')
             expect(head2).toEqual(b)
             expect(head2).not.toEqual(head1)
@@ -292,14 +283,12 @@ describe('NuMcpPool — Cycle 4: per-bucket serialization in pool.call', () => {
             // JSON-RPC response still completes, so the mutex must release.
             // (We also cover the throw path by directly testing the thrown-error
             // case via a missing tool name.)
-            await expect(
+            expect(
                 p.call('rej', 'this-tool-does-not-exist', { input: '1' })
             ).rejects.toThrow()
 
             // If mutex leaked, this hangs forever; bun test will time out.
-            const { response: r } = await p.call('rej', 'evaluate', {
-                input: '42',
-            })
+            const { response: r } = await p.call('rej', 'evaluate', { input: '42' })
             assertOk(r)
             expect(r.text).toContain('42')
         } finally {
@@ -341,7 +330,7 @@ describe('NuMcpPool — Cycle 5: ring buffer + envelope cache', () => {
             const head = p.lastResponse('ring')
             if (head === null) throw new Error('expected non-null head')
             assertOk(head)
-            expect(head.text).toContain('output:"6"')
+            expect(head.text).toContain('output:6')
             // Inspect buffer to confirm oldest is gone — head is 6, oldest entry
             // should be 2 (entries 2..6), not 1.
             const all = p._inspectBuffer('ring')
@@ -354,13 +343,11 @@ describe('NuMcpPool — Cycle 5: ring buffer + envelope cache', () => {
             assertOk(first)
             assertOk(last)
             // Head-first ordering: index 0 is newest.
-            expect(first.text).toContain('output:"6"')
-            expect(last.text).toContain('output:"2"')
+            expect(first.text).toContain('output:6')
+            expect(last.text).toContain('output:2')
             // 1 is evicted. Each pushed evaluate succeeded, so every entry is
             // on the success branch; safe to read `.text` after narrowing.
-            const found = all.find(
-                r => !r.isError && r.text.includes('output:"1"')
-            )
+            const found = all.find(r => !r.isError && r.text.includes('output:"1"'))
             expect(found).toBeUndefined()
         } finally {
             p.nukeAll()
@@ -376,9 +363,7 @@ describe('NuMcpPool — Cycle 5: ring buffer + envelope cache', () => {
             p.clearBuffer('clr')
             expect(p.lastResponse('clr')).toBeNull()
             // Child still works — clearBuffer is buffer-only.
-            const { response: r } = await p.call('clr', 'evaluate', {
-                input: '2',
-            })
+            const { response: r } = await p.call('clr', 'evaluate', { input: '2' })
             expect(r.isError).toBe(false)
         } finally {
             p.nukeAll()
@@ -449,9 +434,9 @@ describe('NuMcpPool — Cycle 6: crash policy + killAll integration', () => {
         await pool.call('crash2', 'evaluate', { input: '1' })
         child.kill()
         await new Promise(r => setTimeout(r, 50))
-        await expect(
-            pool.call('crash2', 'evaluate', { input: '2' })
-        ).rejects.toThrow(/does not exist|missing|not found|died/i)
+        await expect(pool.call('crash2', 'evaluate', { input: '2' })).rejects.toThrow(
+            /does not exist|missing|not found|died/i
+        )
     })
 
     test('nu.killAll() empties the singleton pool', async () => {
@@ -496,15 +481,13 @@ describe('NuMcpPool — status() probeError surfacing', () => {
             // raw proc goes through the _getProc test-only accessor since
             // the field itself is private (Copilot 3295803625).
             const rawProc = child._getProc()
-            if (!rawProc)
-                throw new Error('expected proc to be spawned by p.call')
+            if (!rawProc) throw new Error('expected proc to be spawned by p.call')
             rawProc.kill()
             // status() sees the bucket entry still alive (onExit fires async)
             // but the probe evaluate call will fail because the child is dead.
             const result = await p.status('probe-err')
             expect(result.kind).toBe('probe-error')
-            if (result.kind !== 'probe-error')
-                throw new Error('expected probe-error')
+            if (result.kind !== 'probe-error') throw new Error('expected probe-error')
             expect(result.probeError).toBeDefined()
             expect(typeof result.probeError).toBe('string')
             // The error message should mention the child dying or stdin being gone.
@@ -551,9 +534,7 @@ describe('NuMcpPool — crash mid-call', () => {
             expect(p.has('victim')).toBe(true)
 
             // Start a long-running call WITHOUT awaiting.
-            const callPromise = p.call('victim', 'evaluate', {
-                input: 'sleep 5sec',
-            })
+            const callPromise = p.call('victim', 'evaluate', { input: 'sleep 5sec' })
 
             // Give the call's sendRpc time to register on the pending map
             // before we kill the child.
@@ -590,9 +571,7 @@ describe('NuMcpPool — env-var cap (NUSHELL_MCP_MAX_REPLS=3)', () => {
             p.spawn('cap2')
             p.spawn('cap3')
             expect(p.list().sort()).toEqual(['cap1', 'cap2', 'cap3'])
-            expect(() => p!.spawn('cap4')).toThrow(
-                /maximum active repls reached.*3/i
-            )
+            expect(() => p!.spawn('cap4')).toThrow(/maximum active repls reached.*3/i)
         } finally {
             p?.nukeAll()
             if (original === undefined) delete process.env.NUSHELL_MCP_MAX_REPLS
@@ -745,9 +724,7 @@ describe("NuMcpPool — BUG 3 regression: concurrent clear(key, 'all') must not 
             // Bucket must still exist (one clear won and respawned).
             expect(p.has('concurrent-clear')).toBe(true)
             // Pool has exactly one bucket registered under this key.
-            expect(p.list().filter(k => k === 'concurrent-clear').length).toBe(
-                1
-            )
+            expect(p.list().filter(k => k === 'concurrent-clear').length).toBe(1)
         } finally {
             p.nukeAll()
         }
@@ -785,13 +762,11 @@ describe('NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
             p.spawn('atomic-env')
             await p.call('atomic-env', 'evaluate', { input: `cd "${TMP_DIR}"` })
             // The second call's envelope should reflect cwd=/tmp set above.
-            const { response, envelope } = await p.call(
-                'atomic-env',
-                'evaluate',
-                { input: '1 + 1' }
-            )
+            const { response, envelope } = await p.call('atomic-env', 'evaluate', {
+                input: '1 + 1',
+            })
             assertOk(response)
-            expect(response.text).toContain('output:"2"')
+            expect(response.text).toContain('output:2')
             // Envelope must carry the cwd that was set before this call.
             expect(envelope.kind).toBe('ok')
             if (envelope.kind !== 'ok') throw new Error('envelope not ok')
@@ -834,9 +809,7 @@ describe('NuMcpPool — cycle 3: kill terminates an in-flight long call promptly
             p.spawn('long-call')
             // Fire a long evaluate without awaiting — it will hold the
             // bucket mutex for the duration of the sleep.
-            const callPromise = p.call('long-call', 'evaluate', {
-                input: 'sleep 5sec',
-            })
+            const callPromise = p.call('long-call', 'evaluate', { input: 'sleep 5sec' })
             // Capture the call's eventual outcome without leaking an
             // unhandled rejection in the meantime.
             const settled = callPromise.then(
