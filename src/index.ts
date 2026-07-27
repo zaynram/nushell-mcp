@@ -17,7 +17,7 @@ import vars from '#vars'
  * server exposed "run a command in a Windows shell", this one is scoped to
  * Nushell specifically and adds queryable documentation.
  *
- * Tools (12, see Plan B §3):
+ * Tools:
  *   nu_exec          — one-shot Nushell pipeline (no cross-call state)
  *   nu_exec_abort    — cancel in-flight nu_exec calls
  *   nu_doc_search    — search installed commands
@@ -37,31 +37,21 @@ import { z } from 'zod'
 
 /** Build the human-readable text block for a `nu_exec` result. */
 function renderExec(
-    {
-        stdout,
-        stderr,
-        resultType,
-        bashRunner,
-        exitCode,
-        timedOut,
-    }: PipelineResult,
+    { stdout, stderr, resultType, bashRunner, exitCode, timedOut }: PipelineResult,
     timeoutMs: number
 ): string {
     const parts = [Bun.stripANSI(stdout.replace(/\s+$/, '')) || '(no output)']
+    // Surface output from stderr if it's not empty
     if (stderr.trim()) parts.push(`\n[stderr]\n${Bun.stripANSI(stderr).trim()}`)
-
-    if (resultType && resultType !== 'nothing') {
+    // Only show the type description for non-null return values
+    if (resultType && resultType !== 'nothing')
         parts.push(`\n[result type: ${resultType}]`)
-    }
-
+    // Show any output from the bashEnv runner if not empty
     if (bashRunner) parts.push(`\n[bashEnv runner: ${bashRunner}]`)
-
-    if (timedOut) {
-        parts.push(`\n[timed out after ${timeoutMs}ms — process killed]`)
-    } else if (exitCode === null) {
-        parts.push('\n[process aborted — terminated by signal]')
-    } else if (exitCode !== 0) parts.push(`\n[exit code ${exitCode}]`)
-
+    // Show the subprocess status based on the exit information
+    if (timedOut) parts.push(`\n[timed out after ${timeoutMs}ms — process killed]`)
+    else if (exitCode === null) parts.push('\n[process aborted — terminated by signal]')
+    else if (exitCode !== 0) parts.push(`\n[exit code ${exitCode}]`)
     return parts.join('\n')
 }
 
@@ -73,20 +63,15 @@ server.registerTool(
     {
         title: 'Run a one-shot Nushell pipeline',
         description:
-            'Evaluate Nushell code in a fresh, one-shot `nu` process on the ' +
-            'host running this server (a local OS process — paths and `sys` ' +
-            "calls reflect that host, not the caller's sandbox). Returns the " +
-            'rendered output plus the final value as NUON — a concise ' +
-            'superset of JSON that preserves Nushell types (filesizes, ' +
-            'durations, datetimes) — and its `describe` type. Each call is ' +
-            'independent (no implicit session): pass `cwd`/`env` per call. ' +
-            'For cross-call session state (let, $env, cwd), use the ' +
-            '`nu_repl_*` family instead. Pass `input` to feed a dataset ' +
-            'into the pipeline as `$in`. Pass `includeDirs` to add module ' +
-            'search paths so `use` resolves modules by name. Import a ' +
-            'bash-style environment ' +
-            'with `bashEnv` (script runs via WSL/Git Bash/bash; exported ' +
-            "vars merge into nu's env for this call). For large results, " +
+            'Evaluate Nushell code in a one-shot pipeline. The `nu` process' +
+            'is spawned on the host machine (no sandbox) with a fresh environment and' +
+            'process state on every invocation (no implicit session). Output is returned' +
+            "in it's rendered and serialized forms, along with its native Nushell type(s)." +
+            'For cross-call session state, use the `nu_repl_*` tool family instead. Use' +
+            'the `input` parameter to feed a dataset into the pipeline as `$in`. Prepare' +
+            'the session environment through the `env` (environment variables),`cwd` ' +
+            '(working directory), `includeDirs` (module search paths), and `bashEnv` (' +
+            'load environment from bash script into the Nushell process). For large results,' +
             'slice inside the pipeline (e.g. `... | first 50`).',
         inputSchema: {
             pipeline: z
@@ -118,8 +103,7 @@ server.registerTool(
                     'Module search directories for this call, passed to nu ' +
                         'via `--include-path`. Entries are prepended to the ' +
                         'default NU_LIB_DIRS in the given order and take ' +
-                        'search precedence — the default search path is ' +
-                        'extended, never replaced. Lets `use` resolve ' +
+                        'search precedence. Lets `use` resolve ' +
                         'bare-name and ./-relative modules regardless of ' +
                         "the generated script file's location."
                 ),
@@ -133,16 +117,14 @@ server.registerTool(
             cleanEnv: z
                 .boolean()
                 .optional()
-                .describe(
-                    "Use only `env` instead of extending the server's environment."
-                ),
+                .describe("Use only `env` instead of extending the host's environment."),
             timeoutMs: z
                 .number()
                 .int()
                 .positive()
                 .optional()
                 .describe(
-                    `Kill the pipeline after this many ms (default ${vars.TIMEOUT_MS}).`
+                    `Kill the pipeline after this many milliseconds (default ${vars.TIMEOUT_MS}).`
                 ),
             structured: z
                 .boolean()
@@ -157,7 +139,7 @@ server.registerTool(
                 .min(1)
                 .optional()
                 .describe(
-                    'Bash script evaluated through WSL / Git Bash / `bash` before ' +
+                    'Bash script evaluated through before ' +
                         'the user pipeline runs. Variables it exports (new or ' +
                         "changed vs. baseline) are merged into nu's env for this " +
                         'call. Probe order: NUSHELL_MCP_BASH_PATH override, then ' +
@@ -178,7 +160,7 @@ server.registerTool(
             resultType: z
                 .string()
                 .nullable()
-                .describe('`describe` type, e.g. "table<a: int>".'),
+                .describe('`describe` the Nushell native type, e.g. "table<a: int>".'),
             bashRunner: z
                 .string()
                 .optional()
@@ -219,12 +201,7 @@ server.registerTool(
                 noCapture: structured === false,
             })
             return {
-                content: [
-                    {
-                        type: 'text',
-                        text: renderExec(result, effectiveTimeout),
-                    },
-                ],
+                content: [{ type: 'text', text: renderExec(result, effectiveTimeout) }],
                 structuredContent: {
                     stdout: result.stdout,
                     stderr: result.stderr,
@@ -239,9 +216,7 @@ server.registerTool(
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             return {
-                content: [
-                    { type: 'text', text: `Failed to run nu: ${message}` },
-                ],
+                content: [{ type: 'text', text: `Failed to run nu: ${message}` }],
                 structuredContent: {
                     stdout: '',
                     stderr: message,
@@ -324,19 +299,14 @@ server.registerTool(
                     ? `No commands match "${query}".`
                     : `${commands.length} command(s) match "${query}":`
             return {
-                content: [
-                    { type: 'text', text: [header, ...lines].join('\n') },
-                ],
+                content: [{ type: 'text', text: [header, ...lines].join('\n') }],
                 structuredContent: { kind: 'commands', commands },
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             return {
                 content: [
-                    {
-                        type: 'text',
-                        text: `Documentation search failed: ${message}`,
-                    },
+                    { type: 'text', text: `Documentation search failed: ${message}` },
                 ],
                 isError: true,
             }
@@ -358,9 +328,7 @@ server.registerTool(
             name: z
                 .string()
                 .min(1)
-                .describe(
-                    'Exact command name, e.g. "str join", "http get", "where".'
-                ),
+                .describe('Exact command name, e.g. "str join", "http get", "where".'),
         },
         outputSchema: {
             found: z.boolean(),
@@ -398,10 +366,7 @@ server.registerTool(
             const message = err instanceof Error ? err.message : String(err)
             return {
                 content: [
-                    {
-                        type: 'text',
-                        text: `Documentation lookup failed: ${message}`,
-                    },
+                    { type: 'text', text: `Documentation lookup failed: ${message}` },
                 ],
                 isError: true,
             }
@@ -441,9 +406,7 @@ server.registerTool(
         try {
             getReplPool().spawn(key)
             return {
-                content: [
-                    { type: 'text', text: `Spawned REPL bucket "${key}".` },
-                ],
+                content: [{ type: 'text', text: `Spawned REPL bucket "${key}".` }],
                 structuredContent: { key },
             }
         } catch (err) {
@@ -476,10 +439,7 @@ server.registerTool(
         const text = keys.length
             ? `Active REPL buckets (${keys.length}):\n${keys.map(k => `- ${k}`).join('\n')}`
             : 'No active REPL buckets.'
-        return {
-            content: [{ type: 'text', text }],
-            structuredContent: { keys },
-        }
+        return { content: [{ type: 'text', text }], structuredContent: { keys } }
     }
 )
 
@@ -510,20 +470,13 @@ server.registerTool(
             const killed = await getReplPool().kill(key)
             if (!killed) {
                 return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `No REPL bucket named "${key}".`,
-                        },
-                    ],
+                    content: [{ type: 'text', text: `No REPL bucket named "${key}".` }],
                     structuredContent: { key, killed: false },
                     isError: true,
                 }
             }
             return {
-                content: [
-                    { type: 'text', text: `Killed REPL bucket "${key}".` },
-                ],
+                content: [{ type: 'text', text: `Killed REPL bucket "${key}".` }],
                 structuredContent: { key, killed: true },
             }
         } catch (err) {
@@ -583,9 +536,7 @@ server.registerTool(
             // mutex is still held, so the bucket dying after the call cannot
             // cause a separate pool.envelope(key) lookup to throw "bucket does
             // not exist" even though the call itself returned a valid response.
-            const { response, envelope } = await pool.call(key, 'evaluate', {
-                input,
-            })
+            const { response, envelope } = await pool.call(key, 'evaluate', { input })
             // Narrow on the NuMcpToolResponse discriminator: success → text,
             // error → errorText. The MCP wire schema for structuredContent.output
             // stays a single string field — we map errorText back into it on
@@ -636,9 +587,7 @@ server.registerTool(
         inputSchema: { key: REPL_KEY },
         outputSchema: {
             key: z.string(),
-            response: z
-                .object({ text: z.string(), isError: z.boolean() })
-                .nullable(),
+            response: z.object({ text: z.string(), isError: z.boolean() }).nullable(),
         },
         annotations: {
             readOnlyHint: true,
@@ -693,10 +642,7 @@ server.registerTool(
             'call on the bucket to complete before resetting. To break out ' +
             'of a wedged long-running pipeline, use `nu_repl_kill` (then ' +
             '`nu_repl_spawn` to start fresh) instead.',
-        inputSchema: {
-            key: REPL_KEY,
-            mode: z.enum(['all', 'buffer']).optional(),
-        },
+        inputSchema: { key: REPL_KEY, mode: z.enum(['all', 'buffer']).optional() },
         outputSchema: { key: z.string(), mode: z.enum(['all', 'buffer']) },
         annotations: {
             readOnlyHint: false,
@@ -842,9 +788,7 @@ server.registerTool(
     async () => {
         const killed = getReplPool().nukeAll()
         return {
-            content: [
-                { type: 'text', text: `Killed ${killed} REPL bucket(s).` },
-            ],
+            content: [{ type: 'text', text: `Killed ${killed} REPL bucket(s).` }],
             structuredContent: { killed },
         }
     }
@@ -873,10 +817,7 @@ server.registerTool(
         const aborted = abortExec()
         return {
             content: [
-                {
-                    type: 'text',
-                    text: `Aborted ${aborted} exec/bash subprocess(es).`,
-                },
+                { type: 'text', text: `Aborted ${aborted} exec/bash subprocess(es).` },
             ],
             structuredContent: { aborted },
         }

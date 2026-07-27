@@ -1,9 +1,5 @@
 import { active, addActive, removeActive } from '#active'
-import {
-    getNuMcpClient,
-    type ListCommandEntry,
-    parseListCommandsOutput,
-} from '#client'
+import { getNuMcpClient, type ListCommandEntry, parseListCommandsOutput } from '#client'
 import { getReplPool } from '#pool'
 import vars from '#vars'
 /**
@@ -42,8 +38,7 @@ export interface RunOptions {
     /**
      * Per-call module search directories, passed to `nu` via
      * `--include-path`. Entries are prepended to the default `NU_LIB_DIRS`
-     * in the given order and take search precedence — the default search
-     * path is extended, never replaced.
+     * in the given order and take search precedence
      */
     includeDirs?: string[]
     /** Kill the process after this many ms. Defaults to `DEFAULT_TIMEOUT_MS`. */
@@ -91,9 +86,7 @@ const NU_COMMAND = [vars.NU_PATH, '--config', vars.CONFIG_PATH] as const
 
 /** Spawn `nu` with the given argv, collecting stdout/stderr under a timeout. */
 async function spawnNu(argv: string[], opts: RunOptions): Promise<RawResult> {
-    const env = opts.cleanEnv
-        ? (opts.env ?? {})
-        : { ...process.env, ...opts.env }
+    const env = opts.cleanEnv ? (opts.env ?? {}) : { ...process.env, ...opts.env }
     const timeoutMs = opts.timeoutMs ?? vars.TIMEOUT_MS
     // Multiple search dirs pack into one flag value: nu splits on the record
     // separator (char record_sep, 0x1e) and prepends them to the default
@@ -170,11 +163,7 @@ interface ScriptOptions {
  * first-class env access (`$env.X`) and (b) it eliminates a quote-injection
  * surface if a temp path ever contained an apostrophe.
  */
-function buildScript({
-    input = 'null',
-    pipeline,
-    capture,
-}: ScriptOptions): string {
+function buildScript({ input = 'null', pipeline, capture }: ScriptOptions): string {
     const lines: string[] = [
         `let __value = ${quoted(input, true)} | from nuon | do { ${pipeline} }`,
     ]
@@ -203,9 +192,7 @@ const keyPattern = /^[A-Za-z0-9_-]+$/
 export function sanitizeKey(key: string | undefined): string {
     const k = key ?? 'default'
     if (!keyPattern.test(k)) {
-        throw new Error(
-            `bucket key must match ${keyPattern} (got ${JSON.stringify(k)})`
-        )
+        throw new Error(`bucket key must match ${keyPattern} (got ${JSON.stringify(k)})`)
     }
     return k
 }
@@ -233,9 +220,7 @@ let bashRunnerProbe: Promise<BashRunner | null> | null = null
 /** Spawn the candidate runner with `true` to confirm it actually executes. */
 async function probeRunner(argv: string[]): Promise<boolean> {
     try {
-        const proc = Bun.spawn([...argv, 'true'], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-        })
+        const proc = Bun.spawn([...argv, 'true'], { stdio: ['ignore', 'pipe', 'pipe'] })
         const timer = setTimeout(() => proc.kill(), 5_000)
         await proc.exited
         clearTimeout(timer)
@@ -260,9 +245,7 @@ async function detectBashRunner(): Promise<BashRunner | null> {
     const override = process.env.NUSHELL_MCP_BASH_PATH
     if (override) {
         const isWsl = /(^|[\\/])wsl(\.exe)?$/i.test(override)
-        const argv = isWsl
-            ? [override, '-e', '/usr/bin/bash', '-c']
-            : [override, '-c']
+        const argv = isWsl ? [override, '-e', '/usr/bin/bash', '-c'] : [override, '-c']
         if (await probeRunner(argv)) {
             return { argv, label: isWsl ? 'wsl (override)' : 'bash (override)' }
         }
@@ -517,18 +500,14 @@ export async function runRaw(
     code: string,
     { input, env, ...rest }: RunOptions = {}
 ): Promise<RawResult> {
-    if (input === undefined)
-        return spawnNu(['--commands', code], { env, ...rest })
+    if (input === undefined) return spawnNu(['--commands', code], { env, ...rest })
 
     // With input we still avoid the NUON/type wrap, but we have to write a
     // tiny script: `nu -c` can't both read NU_MCP_INPUT and accept user code
     // that references `$in` without a wrapper.
     const id = randomBytes(6).toString('hex')
     const scriptPath = join(tmpdir(), `nushell-mcp-${id}.nu`)
-    await Bun.write(
-        scriptPath,
-        `${quoted(input, true)} | from nuon | do { ${code} }`
-    )
+    await Bun.write(scriptPath, `${quoted(input, true)} | from nuon | do { ${code} }`)
     try {
         return await spawnNu([scriptPath], { env, ...rest })
     } finally {
@@ -556,13 +535,12 @@ export interface CaptureOptions {
     noCapture?: boolean
 }
 
-export interface PipelineOptions
-    extends RunOptions, BashBridgeOptions, CaptureOptions {}
+export interface PipelineOptions extends RunOptions, BashBridgeOptions, CaptureOptions {}
 
 /** Run a Nushell pipeline and recover its final value as NUON. */
 export async function runPipeline(
     pipeline: string,
-    { input, ...opts }: PipelineOptions = {}
+    { input, bashEnv, noCapture, ...opts }: PipelineOptions = {}
 ): Promise<PipelineResult> {
     const id = randomBytes(6).toString('hex')
     const scriptPath = join(tmpdir(), `nushell-mcp-${id}.nu`)
@@ -575,51 +553,35 @@ export async function runPipeline(
     // --- Bash bridge ------------------------------------------------------
     let bridgeEnv: Record<string, string> = {}
     let bashRunner: string | undefined
-    if (opts.bashEnv !== undefined && opts.bashEnv.length > 0) {
-        const result = await loadBashEnv(opts.bashEnv, {
-            timeoutMs: opts.timeoutMs,
-        })
+    if (bashEnv !== undefined && bashEnv.length > 0) {
+        const result = await loadBashEnv(bashEnv, { timeoutMs: opts.timeoutMs })
         bridgeEnv = result.vars
         bashRunner = result.runner
     }
 
     // --- Compose & write script ------------------------------------------
-    const capture = opts.noCapture
+    const capture = noCapture
         ? undefined
         : { nuonPath: fwd(nuonPath), typePath: fwd(typePath) }
     await Bun.write(scriptPath, buildScript({ pipeline, input, capture }))
 
-    // Layer env vars from least to most authoritative:
-    //   bashEnv-captured  →  caller's explicit env  →  server-controlled.
-    // Server-controlled capture-paths come last and are snapshotted into
-    // local `let` bindings inside the script (see buildScript), so
-    // mid-pipeline $env mutation can't redirect them.
-    const env: Record<string, string> = { ...bridgeEnv, ...opts.env }
-
     try {
         const raw = await spawnNu([scriptPath], {
-            cwd: opts.cwd,
-            env,
-            cleanEnv: opts.cleanEnv,
-            includeDirs: opts.includeDirs,
-            timeoutMs: opts.timeoutMs,
+            ...opts,
+            // Layer env vars from least to most authoritative:
+            //   bashEnv-captured  →  caller's explicit env  →  server-controlled.
+            // Server-controlled capture-paths come last and are snapshotted into
+            // local `let` bindings inside the script (see buildScript), so
+            // mid-pipeline $env mutation can't redirect them.
+            env: { ...bridgeEnv, ...opts.env },
         })
         const [nuon, resultType] = await Promise.all([
-            readIfExists(nuonPath),
-            readIfExists(typePath),
+            readIfExists(nuonPath).then(nuon => nuon?.replace(/\s+$/, '') ?? null),
+            readIfExists(typePath).then(type => type?.trim() ?? null),
         ])
-        return {
-            ...raw,
-            nuon: nuon?.replace(/\s+$/, '') ?? null,
-            resultType: resultType?.trim() ?? null,
-            bashRunner,
-        }
+        return { ...raw, nuon, resultType, bashRunner }
     } finally {
-        await Promise.allSettled([
-            unlink(scriptPath),
-            unlink(nuonPath),
-            unlink(typePath),
-        ])
+        await Promise.allSettled([unlink(scriptPath), unlink(nuonPath), unlink(typePath)])
     }
 }
 
@@ -693,9 +655,7 @@ let nuVersionPromise: Promise<string> | null = null
  */
 export function getNuVersion(): Promise<string> {
     if (!nuVersionPromise) {
-        nuVersionPromise = runRaw('version | get version', {
-            timeoutMs: 10_000,
-        })
+        nuVersionPromise = runRaw('version | get version', { timeoutMs: 10_000 })
             .then(r => (r.exitCode === 0 ? r.stdout.trim() : 'unknown'))
             .catch(() => 'unknown')
     }

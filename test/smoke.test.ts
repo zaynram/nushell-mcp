@@ -19,7 +19,7 @@ import {
  * Run with: bun test
  */
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -43,8 +43,7 @@ afterAll(() => {
  */
 let bashRuntimeAvailableCache: boolean | undefined
 async function bashRuntimeAvailable(): Promise<boolean> {
-    if (bashRuntimeAvailableCache !== undefined)
-        return bashRuntimeAvailableCache
+    if (bashRuntimeAvailableCache !== undefined) return bashRuntimeAvailableCache
     try {
         await loadBashEnv('true')
         bashRuntimeAvailableCache = true
@@ -171,10 +170,9 @@ describe('bashEnv bridge', () => {
             console.warn('skipping bashEnv test — no bash runtime detected')
             return
         }
-        const r = await runPipeline(
-            "$env.NUSHELL_MCP_FROM_BASH? | default 'missing'",
-            { bashEnv: 'export NUSHELL_MCP_FROM_BASH=hello-from-bash' }
-        )
+        const r = await runPipeline("$env.NUSHELL_MCP_FROM_BASH? | default 'missing'", {
+            bashEnv: 'export NUSHELL_MCP_FROM_BASH=hello-from-bash',
+        })
         expect(r.exitCode).toBe(0)
         expect(r.nuon).toBe('"hello-from-bash"')
     }, 20_000)
@@ -283,9 +281,9 @@ describe('second-pass audit', () => {
     test('bashEnv honors opts.timeoutMs', async () => {
         if (!(await bashRuntimeAvailable())) return
         const start = Date.now()
-        await expect(
-            loadBashEnv('sleep 5', { timeoutMs: 800 })
-        ).rejects.toThrow(/timed out after 800ms/)
+        await expect(loadBashEnv('sleep 5', { timeoutMs: 800 })).rejects.toThrow(
+            /timed out after 800ms/
+        )
         const elapsed = Date.now() - start
         // Generous bound: the timeout kicks in well under the 5s sleep.
         expect(elapsed).toBeLessThan(3000)
@@ -342,8 +340,7 @@ describe('cycle 2 audit regressions', () => {
         const prevOverride = process.env.NUSHELL_MCP_BASH_PATH
         // Reset memo so the fresh env-var value is probed, not a cached result.
         _resetBashRunnerProbe()
-        process.env.NUSHELL_MCP_BASH_PATH =
-            '/nonexistent/path/that/does/not/exist/bash'
+        process.env.NUSHELL_MCP_BASH_PATH = '/nonexistent/path/that/does/not/exist/bash'
         try {
             await expect(
                 loadBashEnv('export CYCLE2_C1_TEST=should-not-run')
@@ -363,9 +360,7 @@ describe('cycle 2 audit regressions', () => {
     // it in PipelineResult.bashRunner so callers can see which runtime was used.
     test('loadBashEnv result includes runner label', async () => {
         if (!(await bashRuntimeAvailable())) {
-            console.warn(
-                'skipping bashRunner label test — no bash runtime detected'
-            )
+            console.warn('skipping bashRunner label test — no bash runtime detected')
             return
         }
         const result = await loadBashEnv('export CYCLE2_C2_TEST=runner-label')
@@ -375,15 +370,12 @@ describe('cycle 2 audit regressions', () => {
 
     test('runPipeline populates PipelineResult.bashRunner when bashEnv is used', async () => {
         if (!(await bashRuntimeAvailable())) {
-            console.warn(
-                'skipping bashRunner field test — no bash runtime detected'
-            )
+            console.warn('skipping bashRunner field test — no bash runtime detected')
             return
         }
-        const r = await runPipeline(
-            "$env.CYCLE2_RUNNER_VAR? | default 'missing'",
-            { bashEnv: 'export CYCLE2_RUNNER_VAR=present' }
-        )
+        const r = await runPipeline("$env.CYCLE2_RUNNER_VAR? | default 'missing'", {
+            bashEnv: 'export CYCLE2_RUNNER_VAR=present',
+        })
         expect(r.exitCode).toBe(0)
         expect(r.bashRunner).toBeDefined()
         expect((r.bashRunner ?? '').length).toBeGreaterThan(0)
@@ -422,8 +414,7 @@ describe('MCP server wiring', () => {
                 buffer += decoder.decode(value, { stream: true })
             }
         }
-        const send = (message: object) =>
-            proc.stdin.write(JSON.stringify(message) + '\n')
+        const send = (message: object) => proc.stdin.write(JSON.stringify(message) + '\n')
 
         try {
             send({
@@ -559,16 +550,10 @@ describe('MCP server wiring', () => {
             // Helper: send one tools/call and await its response.
             // Serializes the test so map state mutations land in order.
             type ToolResult = {
-                result: {
-                    isError?: boolean
-                    structuredContent?: Record<string, unknown>
-                }
+                result: { isError?: boolean; structuredContent?: Record<string, unknown> }
             }
             let nextId = 2
-            const call = async (
-                name: string,
-                args: object = {}
-            ): Promise<ToolResult> => {
+            const call = async (name: string, args: object = {}): Promise<ToolResult> => {
                 const id = nextId++
                 send({
                     jsonrpc: '2.0',
@@ -577,10 +562,7 @@ describe('MCP server wiring', () => {
                     params: { name, arguments: args },
                 })
                 await proc.stdin.flush()
-                const res = (await collect([id])) as unknown as Record<
-                    number,
-                    ToolResult
-                >
+                const res = (await collect([id])) as unknown as Record<number, ToolResult>
                 return res[id]!
             }
 
@@ -630,14 +612,9 @@ describe('MCP server wiring', () => {
                 input: 'let x = 42',
             })
             expect(w1.result.isError).toBeFalsy()
-            const w2 = await call('nu_repl_write', {
-                key: 'writebench',
-                input: '$x',
-            })
+            const w2 = await call('nu_repl_write', { key: 'writebench', input: '$x' })
             expect(w2.result.isError).toBeFalsy()
-            expect(
-                (w2.result.structuredContent?.output as string) ?? ''
-            ).toContain('42')
+            expect((w2.result.structuredContent?.output as string) ?? '').toContain('42')
             // Write on a missing bucket errors.
             const wErr = await call('nu_repl_write', {
                 key: 'no-such-bucket',
@@ -654,11 +631,8 @@ describe('MCP server wiring', () => {
             await call('nu_repl_write', { key: 'readbench', input: '100 + 1' })
             const rd1 = await call('nu_repl_read', { key: 'readbench' })
             expect(
-                (
-                    rd1.result.structuredContent?.response as {
-                        text?: string
-                    } | null
-                )?.text ?? ''
+                (rd1.result.structuredContent?.response as { text?: string } | null)
+                    ?.text ?? ''
             ).toContain('101')
             // Read on a missing bucket errors.
             const rdErr = await call('nu_repl_read', { key: 'missing' })
@@ -666,60 +640,32 @@ describe('MCP server wiring', () => {
 
             // --- Plan B Cycle 10: nu_repl_clear ------------------
             // Set state, clear buffer (state remains).
-            await call('nu_repl_write', {
-                key: 'readbench',
-                input: 'let y = 99',
-            })
-            const cb = await call('nu_repl_clear', {
-                key: 'readbench',
-                mode: 'buffer',
-            })
+            await call('nu_repl_write', { key: 'readbench', input: 'let y = 99' })
+            const cb = await call('nu_repl_clear', { key: 'readbench', mode: 'buffer' })
             expect(cb.result.isError).toBeFalsy()
-            const rdAfterBufClear = await call('nu_repl_read', {
-                key: 'readbench',
-            })
-            expect(
-                rdAfterBufClear.result.structuredContent?.response
-            ).toBeNull()
+            const rdAfterBufClear = await call('nu_repl_read', { key: 'readbench' })
+            expect(rdAfterBufClear.result.structuredContent?.response).toBeNull()
             // $y still defined — state survived buffer clear.
-            const yLookup = await call('nu_repl_write', {
-                key: 'readbench',
-                input: '$y',
-            })
+            const yLookup = await call('nu_repl_write', { key: 'readbench', input: '$y' })
             expect(yLookup.result.isError).toBeFalsy()
-            expect(
-                (yLookup.result.structuredContent?.output as string) ?? ''
-            ).toContain('99')
+            expect((yLookup.result.structuredContent?.output as string) ?? '').toContain(
+                '99'
+            )
             // Clear "all" wipes the session.
-            const ca = await call('nu_repl_clear', {
-                key: 'readbench',
-                mode: 'all',
-            })
+            const ca = await call('nu_repl_clear', { key: 'readbench', mode: 'all' })
             expect(ca.result.isError).toBeFalsy()
-            const yLost = await call('nu_repl_write', {
-                key: 'readbench',
-                input: '$y',
-            })
+            const yLost = await call('nu_repl_write', { key: 'readbench', input: '$y' })
             // $y should now be undefined → evaluate errors.
             expect(yLost.result.isError).toBe(true)
             // Default mode is "all" (per Plan B open question resolution).
-            await call('nu_repl_write', {
-                key: 'readbench',
-                input: 'let z = 5',
-            })
+            await call('nu_repl_write', { key: 'readbench', input: 'let z = 5' })
             await call('nu_repl_clear', { key: 'readbench' })
-            const zLost = await call('nu_repl_write', {
-                key: 'readbench',
-                input: '$z',
-            })
+            const zLost = await call('nu_repl_write', { key: 'readbench', input: '$z' })
             expect(zLost.result.isError).toBe(true)
 
             // --- Plan B Cycle 11: nu_repl_status -----------------
             await call('nu_repl_spawn', { key: 'statbench' })
-            await call('nu_repl_write', {
-                key: 'statbench',
-                input: `cd "${TMP_DIR}"`,
-            })
+            await call('nu_repl_write', { key: 'statbench', input: `cd "${TMP_DIR}"` })
             const stat = await call('nu_repl_status', { key: 'statbench' })
             expect(stat.result.isError).toBeFalsy()
             expect(stat.result.structuredContent?.cwd).toBe(TMP_DIR)
@@ -727,8 +673,7 @@ describe('MCP server wiring', () => {
                 (stat.result.structuredContent?.historyIndex as number) ?? 0
             ).toBeGreaterThan(0)
             expect(
-                (stat.result.structuredContent?.envKeys as string[])?.length ??
-                    0
+                (stat.result.structuredContent?.envKeys as string[])?.length ?? 0
             ).toBeGreaterThan(0)
             // Status on a missing bucket errors.
             const statErr = await call('nu_repl_status', { key: 'no-such-key' })
@@ -746,10 +691,7 @@ describe('MCP server wiring', () => {
                 method: 'tools/call',
                 params: {
                     name: 'nu_exec',
-                    arguments: {
-                        pipeline: 'sleep 30sec; 1',
-                        timeoutMs: 60_000,
-                    },
+                    arguments: { pipeline: 'sleep 30sec; 1', timeoutMs: 60_000 },
                 },
             })
             await proc.stdin.flush()
@@ -763,10 +705,10 @@ describe('MCP server wiring', () => {
                 params: { name: 'nu_exec_abort', arguments: {} },
             })
             await proc.stdin.flush()
-            const collected = (await collect([
-                longId,
-                abortId,
-            ])) as unknown as Record<number, ToolResult>
+            const collected = (await collect([longId, abortId])) as unknown as Record<
+                number,
+                ToolResult
+            >
             const abortRes = collected[abortId]!
             const longRes = collected[longId]!
             expect(
@@ -782,20 +724,10 @@ describe('MCP server wiring', () => {
             await call('nu_repl_spawn', { key: 'iso2' })
             await call('nu_repl_write', { key: 'iso1', input: 'let a = 1' })
             await call('nu_repl_write', { key: 'iso2', input: 'let a = 2' })
-            const iso1 = await call('nu_repl_write', {
-                key: 'iso1',
-                input: '$a',
-            })
-            const iso2 = await call('nu_repl_write', {
-                key: 'iso2',
-                input: '$a',
-            })
-            expect(
-                (iso1.result.structuredContent?.output as string) ?? ''
-            ).toContain('1')
-            expect(
-                (iso2.result.structuredContent?.output as string) ?? ''
-            ).toContain('2')
+            const iso1 = await call('nu_repl_write', { key: 'iso1', input: '$a' })
+            const iso2 = await call('nu_repl_write', { key: 'iso2', input: '$a' })
+            expect((iso1.result.structuredContent?.output as string) ?? '').toContain('1')
+            expect((iso2.result.structuredContent?.output as string) ?? '').toContain('2')
 
             // --- Plan B Cycle 15: cross-bucket parallelism -------
             // Two concurrent writes to different buckets should
@@ -964,6 +896,7 @@ describe('includeDirs (-I) module search', () => {
     async function makeModule(body: string): Promise<string> {
         const dir = await mkdtemp(join(TMP_DIR, 'nushell-mcp-incdirs-'))
         moduleDirs.push(dir)
+        await mkdir(join(dir, 'sampmod'), { recursive: true })
         await Bun.write(join(dir, 'sampmod', 'mod.nu'), body)
         return dir
     }
@@ -978,9 +911,7 @@ describe('includeDirs (-I) module search', () => {
         const dir = await makeModule(
             "export def hello []: nothing -> string { 'from-sampmod' }"
         )
-        const r = await runPipeline('use sampmod; sampmod hello', {
-            includeDirs: [dir],
-        })
+        const r = await runPipeline('use sampmod; sampmod hello', { includeDirs: [dir] })
         expect(r.exitCode).toBe(0)
         expect(r.nuon).toBe('"from-sampmod"')
     })
@@ -1000,9 +931,7 @@ describe('includeDirs (-I) module search', () => {
         const dir = await makeModule(
             "export def hello []: nothing -> string { 'raw-sampmod' }"
         )
-        const r = await runRaw('use sampmod; sampmod hello', {
-            includeDirs: [dir],
-        })
+        const r = await runRaw('use sampmod; sampmod hello', { includeDirs: [dir] })
         expect(r.exitCode).toBe(0)
         expect(r.stdout).toContain('raw-sampmod')
     })
@@ -1024,9 +953,7 @@ describe('includeDirs (-I) module search', () => {
     test('omitting includeDirs leaves resolution unchanged', async () => {
         // The module exists on disk but is never passed, so the parser must
         // still fail to find it — proving no dir leaks in by default.
-        await makeModule(
-            "export def hello []: nothing -> string { 'unreachable' }"
-        )
+        await makeModule("export def hello []: nothing -> string { 'unreachable' }")
         const r = await runPipeline('use sampmod; sampmod hello', {})
         expect(r.exitCode).not.toBe(0)
         expect(r.stderr).toContain('Module not found')
