@@ -246,17 +246,14 @@ async function detectBashRunner(): Promise<BashRunner | null> {
     if (override) {
         const isWsl = /(^|[\\/])wsl(\.exe)?$/i.test(override)
         const argv = isWsl ? [override, '-e', '/usr/bin/bash', '-c'] : [override, '-c']
-        if (await probeRunner(argv)) {
+        if (await probeRunner(argv))
             return { argv, label: isWsl ? 'wsl (override)' : 'bash (override)' }
-        }
+
         // The user explicitly opted in to this path — don't silently fall
         // through to auto-detection. A misconfigured override should be
         // loud, not hidden behind a working fallback runner.
         throw new Error(
-            `NUSHELL_MCP_BASH_PATH=${override} did not pass probe — runner unusable. ` +
-                `Restart the nushell-mcp server after unsetting or correcting the env var ` +
-                `(the probe is memoized for the lifetime of the server process). ` +
-                `Without an override, auto-detection tries WSL → Git Bash → bash on PATH.`
+            `NUSHELL_MCP_BASH_PATH=${override} did not pass probe; ensure a valid bash runtime exists and is on PATH.`
         )
     }
 
@@ -463,8 +460,7 @@ export async function loadBashEnv(
     const runner = await getBashRunner()
     if (!runner) {
         throw new Error(
-            'No bash runtime found. Set NUSHELL_MCP_BASH_PATH, install WSL, ' +
-                'install Git Bash, or add bash to PATH.'
+            'No bash runtime found. Set NUSHELL_MCP_BASH_PATH or ensure there is a valid bash runtime on PATH.'
         )
     }
 
