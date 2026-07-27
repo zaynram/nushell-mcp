@@ -347,7 +347,7 @@ describe('NuMcpPool — Cycle 5: ring buffer + envelope cache', () => {
             expect(last.text).toContain('output:2')
             // 1 is evicted. Each pushed evaluate succeeded, so every entry is
             // on the success branch; safe to read `.text` after narrowing.
-            const found = all.find(r => !r.isError && r.text.includes('output:"1"'))
+            const found = all.find(r => !r.isError && r.text.includes('output:1'))
             expect(found).toBeUndefined()
         } finally {
             p.nukeAll()
