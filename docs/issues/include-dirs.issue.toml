@@ -4,7 +4,7 @@ version = '3.0.0'
   name    = 'includeDirs (-I) exec parameter'
   slug    = 'include-dirs'
   date    = 2026-07-16
-  status  = 'open'
+  status  = 'completed'
   extends = ['docs/issues/run-raw-routing.issue.toml']
 
   [issue.vision]
