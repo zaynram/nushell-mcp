@@ -96,39 +96,39 @@ version = '3.0.0'
 [tasks.1]
   id        = 'param-plumbing'
   target    = 'Add includeDirs to RunOptions and spawnNu argv construction, exposed through the nu_exec tool schema with the prepend-with-precedence semantics documented.'
-  completed = false
+  completed = 2026-07-16
 
   [[tasks.1.subtasks]]
     synopsis = 'Add includeDirs to RunOptions and spawnNu'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.1.subtasks]]
     synopsis = 'Expose parameter in nu_exec schema'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.1.subtasks]]
     synopsis = 'Document prepend semantics in description'
     llm      = 'automation'
-    done     = false
+    done     = true
 
 [tasks.2]
   id        = 'coverage'
   target    = 'Regression coverage for bare-name and dot-relative imports via includeDirs across both vehicles, including the unchanged-when-omitted baseline.'
-  completed = false
+  completed = 2026-07-16
 
   [[tasks.2.subtasks]]
     synopsis = 'Cover temp-script vehicle imports'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.2.subtasks]]
     synopsis = 'Cover raw vehicle imports'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.2.subtasks]]
     synopsis = 'Assert omitted-parameter baseline'
     llm      = 'automation'
-    done     = false
+    done     = true
