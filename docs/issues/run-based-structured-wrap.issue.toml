@@ -1,0 +1,168 @@
+version = '3.0.0'
+
+[issue]
+  name    = 'run-based structured wrap'
+  slug    = 'run-based-structured-wrap'
+  date    = 2026-07-16
+  status  = 'open'
+  extends = [
+    'docs/issues/run-raw-routing.issue.toml',
+    'docs/issues/include-dirs.issue.toml',
+  ]
+
+  [issue.vision]
+    outcome = 'singular'
+
+    [[issue.vision.output]]
+      purpose = 'buildScript rewritten around the run keyword: the user pipeline is written raw to its own script file, and the wrapper chains input | from nuon | run <script> with NUON/type capture afterward'
+      path    = 'src/nu.ts'
+
+    [[issue.vision.output]]
+      purpose = 'Structured-mode tool description updated: pipeline imports are scope-visible; input binds to the first pipeline or def main'
+      path    = 'src/index.ts'
+
+    [[issue.vision.output]]
+      purpose = 'Regression coverage: scope introspection inside structured pipelines, input binding shapes, and isolation of env/cd from the capture step'
+      path    = 'test/smoke.test.ts'
+
+    [issue.vision.criteria]
+      requirements = [
+        'In structured mode, use imports in the user pipeline are visible to scope modules and scope commands evaluated within it, while NUON and describe capture semantics stay unchanged.',
+        'Input flows into the user script via its first pipeline or def main; the binding shape and the unbound-$in-in-later-statements caveat are documented in the tool description.',
+        'Env and cwd mutations inside the user script cannot redirect the wrapper capture step.',
+        'run keyword availability is gated: feature-detection via the memoized getNuVersion or an explicit version floor, decided before implementation.',
+        'The user script path is embedded as a parse-time literal (run requires a constant); capture paths keep the immutable-snapshot property.',
+      ]
+      constraints  = [
+        'Sequenced after issues #2 and #3; all three touch buildScript and the spawn machinery.',
+        'Raw mode is untouched; this issue is structured-mode only.',
+        'If feature-detection is chosen, behavior on nu versions predating the run keyword is unchanged.',
+      ]
+
+    [issue.vision.landscape]
+      external = [
+        'run probes (2026-07-16, nu 0.114.1): a script invoked via run gets its own top-level scope — use imports are scope-visible and invokable; input flows via the first pipeline, a bare leading command, or def main, but $in is unbound in later statements.',
+        'Isolation probe: $env mutations and cd inside the run script do not leak to the caller; the run filename must be a parse-time constant (runtime variables fail with "Not a constant").',
+        'Relative use inside a run script still parse-fails against the script file directory; location-independent imports require include paths (see the include-dirs issue).',
+        'run is new to Nushell 0.114; the codebase currently hardcodes no version floor and memoizes getNuVersion at startup.',
+      ]
+
+      [[issue.vision.landscape.internal]]
+        type            = 'brownfield'
+        synopsis        = 'buildScript embeds the user pipeline inside let __value = input | from nuon | do { pipeline } with capture rows appended, all in one generated temp script.'
+        reference       = 'src/nu.ts'
+        incompatibility = 'The do { } closure hides pipeline imports from scope introspection, and the pipeline is string-embedded rather than executed from its own file, so structured mode is permanently scope-blind.'
+
+      [[issue.vision.landscape.internal]]
+        type     = 'greenfield'
+        synopsis = 'A two-file generation scheme (wrapper plus raw user script) and a run-keyword availability gate; neither exists today.'
+
+    [[issue.vision.scope.excluded]]
+      item     = 'Raw-mode execution paths'
+      deferred = 'run-raw-routing'
+
+    [[issue.vision.scope.excluded]]
+      item     = 'Per-call module search paths'
+      deferred = 'include-dirs'
+
+    [[issue.vision.scope.excluded]]
+      item     = 'REPL pool (nu_repl_*) execution paths'
+      deferred = false
+
+  [issue.bindings]
+    [[issue.bindings.xvalue]]
+      type = 'gap-closure'
+      item = 'Extends scope capability to structured mode — the mode that can never move to -c because capture requires a script file — closing the last scope-blind execution surface.'
+
+    [[issue.bindings.xvalue]]
+      type = 'precomputed-context'
+      item = 'Encodes the run-keyword probe matrix (input binding shapes, isolation, const filename, script-dir resolution) so implementation starts from verified semantics.'
+
+    [[issue.bindings.xvalue]]
+      type = 'effort-leverage'
+      item = 'Removes the recurring forced choice between scope introspection and NUON capture when composing structured pipelines.'
+
+    [[issue.bindings.xabort]]
+      action = 'reevaluate'
+
+      [issue.bindings.xabort.trigger]
+        mode       = 'OR'
+        conditions = [
+          'Upstream Nushell alters run keyword semantics (input binding, isolation, or const-filename rules) before implementation',
+          'Issue #2 or #3 lands buildScript changes that conflict with the two-file scheme',
+        ]
+
+  [issue.reference]
+    url    = 'https://github.com/zaynram/nushell-mcp/issues/5'
+    branch = 'run-based-structured-wrap'
+    index  = 5
+
+[tasks.1]
+  id        = 'version-gate'
+  target    = 'Decide the run-keyword availability strategy: feature-detection via the memoized getNuVersion versus an explicit minimum-version floor.'
+  completed = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Draft feature-detect and floor options'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Decide availability strategy'
+    llm      = 'none'
+    done     = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Record decision in MADR draft'
+    llm      = 'augmentation'
+    done     = false
+
+[tasks.2]
+  id        = 'two-file-wrap'
+  target    = 'Rewrite buildScript around run: emit the raw user script plus a wrapper that pipes input and captures NUON/type after the run call.'
+  completed = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Write failing scope-visibility test'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Implement two-file buildScript'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Preserve capture and cleanup invariants'
+    llm      = 'augmentation'
+    done     = false
+
+[tasks.3]
+  id        = 'input-binding'
+  target    = 'Document and cover the input binding shapes: first pipeline, bare leading command, and def main, with $in unbound in later statements.'
+  completed = false
+
+  [[tasks.3.subtasks]]
+    synopsis = 'Cover input binding shapes with tests'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.3.subtasks]]
+    synopsis = 'Update tool description for binding'
+    llm      = 'automation'
+    done     = false
+
+[tasks.4]
+  id        = 'isolation-coverage'
+  target    = 'Regression coverage proving env and cd mutations inside the user script cannot affect the wrapper capture step.'
+  completed = false
+
+  [[tasks.4.subtasks]]
+    synopsis = 'Cover env and cd isolation with tests'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.4.subtasks]]
+    synopsis = 'Run bun run check clean'
+    llm      = 'automation'
+    done     = false

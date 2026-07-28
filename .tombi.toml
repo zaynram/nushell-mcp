@@ -1,16 +1,13 @@
 toml-version = 'v1.1.0'
 
 [files]
-    include = [
-        '.tombi.toml',
-        'docs/**/*.toml',
-    ]
+  include = ['.tombi.toml', 'docs/**/*.toml']
 
-[format.rules]
+[format]
+  [format.rules]
     date-time-delimiter             = 'preserve'
     indent-sub-tables               = true
     indent-table-key-value-pairs    = true
-    indent-width                    = 4
     inline-table-brace-space-width  = 1
     key-value-equals-sign-alignment = true
     line-width                      = 80
@@ -19,10 +16,10 @@ toml-version = 'v1.1.0'
     trailing-comment-alignment      = true
 
 [schema]
-    enabled = true
-    strict  = true
+  enabled = true
+  strict  = true
 
 [[schemas]]
-    toml-version = 'v1.1.0'
-    path         = 'https://zaynram.github.io/ramda-doc/schema/issue.schema.json'
-    include      = ['**/*.issue.toml']
+  toml-version = 'v1.1.0'
+  path         = 'https://zaynram.github.io/ramda-doc/schema/issue.schema.json'
+  include      = ['docs/issues/*.toml']

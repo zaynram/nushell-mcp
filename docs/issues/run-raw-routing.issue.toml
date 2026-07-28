@@ -1,0 +1,185 @@
+version = '3.0.0'
+
+[issue]
+  name    = 'Route raw mode through runRaw'
+  slug    = 'run-raw-routing'
+  date    = 2026-07-16
+  status  = 'open'
+  extends = ['docs/issues/pathext-omission.issue.toml']
+
+  [issue.vision]
+    outcome = 'singular'
+
+    [[issue.vision.output]]
+      purpose = 'nu_exec routing that sends structured: false through runRaw, with the tool description updated to "raw = unwrapped, scope-capable, no NUON capture"'
+      path    = 'src/index.ts'
+
+    [[issue.vision.output]]
+      purpose = 'runRaw with env-layering parity: bashEnv bridge hoisted out of runPipeline into shared machinery, and a -c-compatible input vehicle replacing the temp-script do-wrap leg'
+      path    = 'src/nu.ts'
+
+    [[issue.vision.output]]
+      purpose = 'Regression coverage pinning the new raw routing: scope visibility, relative-use-under-cwd resolution, and input/bashEnv parity in raw mode'
+      path    = 'test/smoke.test.ts'
+
+    [[issue.vision.output]]
+      purpose = 'Project guidance reconciled with the new routing, replacing the standing "do not shortcut back to runRaw" prohibition'
+      path    = 'CLAUDE.md'
+
+    [issue.vision.criteria]
+      requirements = [
+        'With structured: false, nu_exec executes via plain nu --commands: parse-time imports (file-based, inline module, std) are visible to scope modules and scope commands and remain invokable — no do { } wrap, no NUON capture.',
+        'Relative use paths in raw mode resolve against the effective cwd of the call, in both the with-input and without-input legs.',
+        'input and bashEnv keep their current semantics in raw mode; the raw with-input vehicle must not reintroduce the do-wrap blindness or the temp-script relative-path breakage.',
+        'The nu_exec tool description states the mode split: raw = unwrapped, scope-capable, no NUON capture; structured = wrapped, NUON plus describe capture.',
+        'CLAUDE.md guidance and test/smoke.test.ts are reconciled: the regression pins the new raw-to-runRaw routing instead of prohibiting it.',
+        'nu_exec remains stateless in both modes; no env or cwd mutation survives the call.',
+      ]
+      constraints  = [
+        'Structured (default) mode is behaviorally unchanged: buildScript wrap, NUON/type capture, and immutable server-path snapshots stay intact.',
+        'Implementation is sequenced after issue #2 (pathext-omission); both touch the same spawn/env machinery and #2 lands first.',
+        'Every spawned subprocess stays registered in the active set with its ActiveRole tag so killAll and abortExec reach it.',
+      ]
+
+    [issue.vision.landscape]
+      external = [
+        'Reproduction matrix (2026-07-15): inside the do { } wrap every import kind is callable but invisible to scope modules/commands; every unwrapped leg (-c variants, top-level script) shows imports fully. Verified byte-equivalent in the published nushell-mcp@0.2.3 dist.',
+        'Vehicle probe (2026-07-16): nu -c with cwd set to the module directory resolves relative use ./sample (scope-visible, invokable); a temp script in tmpdir parse-fails the same import regardless of cwd, because parsing precedes evaluation.',
+        'Nushell scoping semantics: imports compiled inside a closure are callable but not enumerated by scope commands evaluated within it; no upstream mitigation exists while the wrap is present.',
+      ]
+
+      [[issue.vision.landscape.internal]]
+        type            = 'brownfield'
+        synopsis        = 'nu_exec raw-mode routing in the MCP tool layer: every call flows through runPipeline with noCapture: structured === false.'
+        reference       = 'src/index.ts'
+        incompatibility = 'Raw mode still writes a temp script wrapped in do { }, so scope introspection is blind and relative use parse-fails against tmpdir; runRaw exists in the subprocess layer but nothing routes to it.'
+
+      [[issue.vision.landscape.internal]]
+        type            = 'brownfield'
+        synopsis        = 'runRaw in the subprocess layer: nu --commands without input, temp-script do-wrap with input; env, cleanEnv, cwd, and timeout are already shared via spawnNu.'
+        reference       = 'src/nu.ts'
+        incompatibility = 'The bashEnv bridge (loadBashEnv delta-merge) lives only in runPipeline, and the with-input leg falls back to the exact temp-script vehicle this issue eliminates.'
+
+      [[issue.vision.landscape.internal]]
+        type     = 'greenfield'
+        synopsis = 'A -c-compatible input mechanism for raw mode and a shared bashEnv layering helper; neither exists in any prior form.'
+
+    [[issue.vision.scope.excluded]]
+      item     = 'Structured-mode buildScript wrap changes'
+      deferred = false
+
+    [[issue.vision.scope.excluded]]
+      item     = 'REPL pool (nu_repl_*) execution paths'
+      deferred = false
+
+    [[issue.vision.scope.excluded]]
+      item     = 'Windows-essential env allowlist'
+      deferred = 'pathext-omission'
+
+  [issue.bindings]
+    [[issue.bindings.xvalue]]
+      type = 'gap-closure'
+      item = 'Restores scope introspection and module-import ergonomics to one-shot raw execution, retiring the alias-bridge workaround from the nu-fluency skill surface.'
+
+    [[issue.bindings.xvalue]]
+      type = 'practice-fidelity'
+      item = 'Makes the tool description match runtime behavior: raw mode is documented and implemented as unwrapped, scope-capable, and NUON-free, instead of silently sharing the structured wrap.'
+
+    [[issue.bindings.xvalue]]
+      type = 'precomputed-context'
+      item = 'Encodes the do-wrap blindness diagnosis and the -c versus temp-script vehicle findings so future execution-mode work starts from the verified matrix instead of re-deriving it.'
+
+    [[issue.bindings.xabort]]
+      action = 'reevaluate'
+
+      [issue.bindings.xabort.trigger]
+        mode       = 'OR'
+        conditions = [
+          'Upstream Nushell makes closure-internal imports visible to scope commands, removing the wrap blindness that motivates the rerouting',
+          'Issue #2 lands an env-builder rewrite that subsumes runRaw layering, changing the shared machinery this issue patches',
+        ]
+
+  [issue.reference]
+    url    = 'https://github.com/zaynram/nushell-mcp/issues/3'
+    branch = 'run-raw-routing'
+    index  = 3
+
+[tasks.1]
+  id        = 'raw-input-vehicle'
+  target    = 'Fix the raw-mode execution vehicle: -c for all raw legs, with an input mechanism that avoids both the do-wrap and the temp-script relative-path breakage.'
+  completed = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Prototype stdin piping for raw input'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Decide the raw with-input vehicle'
+    llm      = 'none'
+    done     = false
+
+  [[tasks.1.subtasks]]
+    synopsis = 'Record vehicle decision in MADR draft'
+    llm      = 'augmentation'
+    done     = false
+
+[tasks.2]
+  id        = 'bashenv-parity'
+  target    = 'Hoist the bashEnv bridge out of runPipeline into shared machinery so raw mode keeps bashEnv semantics unchanged.'
+  completed = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Extract shared bashEnv layering helper'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Wire bridge env into the runRaw path'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.2.subtasks]]
+    synopsis = 'Cover raw bashEnv with tests'
+    llm      = 'augmentation'
+    done     = false
+
+[tasks.3]
+  id        = 'route-raw-mode'
+  target    = 'Route nu_exec structured: false through runRaw and update the tool description to the new mode split.'
+  completed = false
+
+  [[tasks.3.subtasks]]
+    synopsis = 'Write failing scope-visibility test'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.3.subtasks]]
+    synopsis = 'Switch index.ts routing to runRaw'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.3.subtasks]]
+    synopsis = 'Update nu_exec tool description'
+    llm      = 'automation'
+    done     = false
+
+[tasks.4]
+  id        = 'guidance-sync'
+  target    = 'Reconcile CLAUDE.md and the smoke-test regression coverage with the new routing, replacing the do-not-use-runRaw prohibition.'
+  completed = false
+
+  [[tasks.4.subtasks]]
+    synopsis = 'Rewrite CLAUDE.md execution guidance'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.4.subtasks]]
+    synopsis = 'Repoint smoke regression at new routing'
+    llm      = 'augmentation'
+    done     = false
+
+  [[tasks.4.subtasks]]
+    synopsis = 'Run bun run check clean'
+    llm      = 'automation'
+    done     = false
