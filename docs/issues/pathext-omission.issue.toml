@@ -36,6 +36,7 @@ version = '3.0.0'
       constraints  = [
         "cleanEnv mode must not leak host environment beyond the explicit essential allowlist; variables Bun itself injects on Windows (SYSTEMROOT, TEMP, PATH, WINDIR) are outside nushell-mcp's control and are documented, not suppressed.",
         'Behavior on POSIX hosts must remain unchanged; the allowlist is Windows-conditional.',
+        'Allowlist decision: PATHEXT, COMSPEC, and TMP, each taking the host value when present, else a Windows default (the standard PATHEXT list; %SYSTEMROOT%\system32\cmd.exe; TEMP), added only when the key is absent, matched case-insensitively.',
       ]
 
     [issue.vision.landscape]
@@ -91,62 +92,62 @@ version = '3.0.0'
 [tasks.1]
   id        = 'repro-fixture'
   target    = 'Encode the minimal reproduction as an executable, currently-failing test fixture before any fix is written.'
-  completed = false
+  completed = 2026-09-05
 
   [[tasks.1.subtasks]]
     synopsis = 'Encode SDK-whitelist repro as fixture input'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.1.subtasks]]
     synopsis = 'Write failing PATHEXT regression test'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.1.subtasks]]
     synopsis = 'Confirm test fails on main under Windows Bun'
     llm      = 'automation'
-    done     = false
+    done     = true
 
 [tasks.2]
   id        = 'essential-allowlist'
   target    = 'Define the Windows-essential variable allowlist and its precedence across the default, env-layered, and cleanEnv construction modes.'
-  completed = false
+  completed = 2026-09-05
 
   [[tasks.2.subtasks]]
     synopsis = 'Survey Windows-essential env variables'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.2.subtasks]]
     synopsis = 'Decide cleanEnv preservation policy'
     llm      = 'none'
-    done     = false
+    done     = true
 
   [[tasks.2.subtasks]]
     synopsis = 'Record allowlist decision in this issue'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
 [tasks.3]
   id        = 'env-builder-patch'
   target    = 'Patch the Nushell environment builder to apply the allowlist platform-conditionally, with test coverage across layering modes.'
-  completed = false
+  completed = 2026-09-05
 
   [[tasks.3.subtasks]]
     synopsis = 'Implement allowlist in env builder'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.3.subtasks]]
     synopsis = 'Cover env and cleanEnv paths with tests'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.3.subtasks]]
     synopsis = 'Verify POSIX behavior unchanged'
     llm      = 'automation'
-    done     = false
+    done     = true
 
 [tasks.4]
   id        = 'release-patch'
@@ -156,7 +157,7 @@ version = '3.0.0'
   [[tasks.4.subtasks]]
     synopsis = 'Write release notes for the v0.2.5 GitHub release'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.4.subtasks]]
     synopsis = 'Bump version to 0.2.5 and publish patch release'
