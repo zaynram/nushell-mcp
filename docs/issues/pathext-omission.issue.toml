@@ -1,7 +1,7 @@
 version = '3.0.0'
 
 [issue]
-  name   = 'PATHEXT dropped in Nushell env'
+  name   = 'PATHEXT absent in Nushell children'
   slug   = 'pathext-omission'
   date   = 2026-07-14
   status = 'open'
@@ -15,7 +15,7 @@ version = '3.0.0'
     outcome = 'singular'
 
     [[issue.vision.output]]
-      purpose = 'A patched environment builder in nushell-mcp that preserves Windows-essential variables (PATHEXT and peers) across all layering modes'
+      purpose = 'An environment builder that backfills Windows-essential variables (PATHEXT and peers) with Windows defaults when the host omits them, applied at every nu spawn site: one-shot spawnNu (default, env-layered, cleanEnv) and the long-lived nu --mcp children.'
       path    = 'src/env.ts'
 
     [[issue.vision.output]]
@@ -24,17 +24,17 @@ version = '3.0.0'
 
     [[issue.vision.output]]
       purpose = 'Verification that the patched version bump was deployed to NPM.'
-      path    = 'https://www.npmjs.com/package/nushell-mcp/v/0.2.4'
+      path    = 'https://www.npmjs.com/package/nushell-mcp/v/0.2.5'
 
     [issue.vision.criteria]
       requirements = [
         'Bare-name external command resolution succeeds in Nushell executions on Windows without caller-supplied env overrides.',
-        'PATHEXT and peer Windows-essential variables (SYSTEMROOT, COMSPEC, TEMP, TMP) survive the default, env-layered, and cleanEnv construction paths.',
+        "PATHEXT and peer Windows-essential variables are present in every nu child on Windows even when absent from the server's own environment, across the one-shot default, env-layered, and cleanEnv paths and the long-lived nu --mcp children.",
         'Regression tests assert per-platform presence of essential variables and bare-name resolution of a known binary.',
-        'Patch released to npm with a changelog entry documenting the resolution semantics.',
+        'Patch released to npm with release notes documenting the resolution semantics.',
       ]
       constraints  = [
-        'cleanEnv mode must not leak host environment beyond the explicit essential allowlist.',
+        "cleanEnv mode must not leak host environment beyond the explicit essential allowlist; variables Bun itself injects on Windows (SYSTEMROOT, TEMP, PATH, WINDIR) are outside nushell-mcp's control and are documented, not suppressed.",
         'Behavior on POSIX hosts must remain unchanged; the allowlist is Windows-conditional.',
       ]
 
@@ -42,17 +42,20 @@ version = '3.0.0'
       external = [
         "Resolution is delegated to the OS model: both where.exe and nu's which expand extensionless names via PATHEXT, so no shell-side mitigation exists when the variable is absent.",
         'Empirical reproduction (2026-07-13): bare resolution failed while explicit .exe suffix, wildcard, and per-call PATHEXT injection each succeeded across which, where.exe, and direct execution.',
+        'The MCP TypeScript SDK stdio client transport launches servers with a fixed whitelist (DEFAULT_INHERITED_ENV_VARS); on win32 it carries APPDATA, HOMEDRIVE, HOMEPATH, LOCALAPPDATA, PATH, PROCESSOR_ARCHITECTURE, SYSTEMDRIVE, SYSTEMROOT, TEMP, USERNAME, USERPROFILE, and PROGRAMFILES, and omits PATHEXT, COMSPEC, and TMP. Claude Desktop using this default is inferred, not verified; the 2026-07-13 symptoms match it exactly.',
+        'Bun.spawn on Windows (bun 1.4.1) injects SYSTEMROOT, TEMP, PATH, and WINDIR into any explicit env, even an empty one, but never PATHEXT, COMSPEC, or TMP; an allowlist only needs to carry what the runtime does not.',
+        'Reproduction (2026-09-04, nu 0.114.2-nightly.2 and bun 1.4.1 on Windows via WSL interop): with the SDK-whitelist env, `which nu` is empty and bare `^where` fails while `^where.exe` succeeds; adding PATHEXT alone restores both, and the full server env is the passing control.',
       ]
 
       [[issue.vision.landscape.internal]]
         type            = 'brownfield'
-        synopsis        = 'Nushell child environment construction in nushell-mcp (default, env, bashEnv, and cleanEnv layering).'
+        synopsis        = 'Nushell child env construction: spawnNu in src/nu.ts (default { ...process.env, ...env }, env-layered, bashEnv-merged, cleanEnv = env-only) and the long-lived nu --mcp children in src/client.ts (doc singleton, REPL buckets), spawned with no env option.'
         reference       = 'https://github.com/zaynram/nushell-mcp'
-        incompatibility = "Omits PATHEXT on Windows, breaking extensionless external-command resolution for both nu's which and where.exe despite the correct directory being present on PATH."
+        incompatibility = "Never drops PATHEXT but never backfills it: every spawn site passes the inherited env through verbatim, so when the MCP host launches the server without PATHEXT every nu child lacks it and extensionless resolution fails in nu's which and where.exe despite PATH being correct."
 
       [[issue.vision.landscape.internal]]
         type     = 'greenfield'
-        synopsis = 'A Windows-essential variable allowlist and platform-conditional preservation policy; no prior structure exists for either.'
+        synopsis = 'A Windows-essential variable allowlist and platform-conditional backfill policy; no prior structure exists for either.'
 
     [[issue.vision.scope.excluded]]
       item     = 'bashEnv variable capture semantics'
@@ -73,7 +76,7 @@ version = '3.0.0'
 
     [[issue.bindings.xvalue]]
       type = 'precomputed-context'
-      item = 'Encodes the two-resolver diagnosis (which plus where.exe) and per-call workaround so future Windows environment bugs start from a verified causal chain.'
+      item = 'Encodes the two-resolver diagnosis (which plus where.exe), the host-side origin (SDK stdio whitelist), the runtime-side backfill (Bun), and the per-call workaround so future Windows environment bugs start from a verified causal chain.'
 
     [[issue.bindings.xabort]]
       action = 'reevaluate'
@@ -91,7 +94,7 @@ version = '3.0.0'
   completed = false
 
   [[tasks.1.subtasks]]
-    synopsis = 'Extract repro pipeline from chat transcript'
+    synopsis = 'Encode SDK-whitelist repro as fixture input'
     llm      = 'augmentation'
     done     = false
 
@@ -101,7 +104,7 @@ version = '3.0.0'
     done     = false
 
   [[tasks.1.subtasks]]
-    synopsis = 'Confirm test fails on current main'
+    synopsis = 'Confirm test fails on main under Windows Bun'
     llm      = 'automation'
     done     = false
 
@@ -121,7 +124,7 @@ version = '3.0.0'
     done     = false
 
   [[tasks.2.subtasks]]
-    synopsis = 'Record decision in MADR draft'
+    synopsis = 'Record allowlist decision in this issue'
     llm      = 'augmentation'
     done     = false
 
@@ -147,16 +150,16 @@ version = '3.0.0'
 
 [tasks.4]
   id        = 'release-patch'
-  target    = 'Ship the fix as an npm patch release with changelog documentation of the resolution semantics.'
+  target    = 'Ship the fix as an npm patch release with release notes documenting the resolution semantics.'
   completed = false
 
   [[tasks.4.subtasks]]
-    synopsis = 'Write changelog entry'
+    synopsis = 'Write release notes for the v0.2.5 GitHub release'
     llm      = 'augmentation'
     done     = false
 
   [[tasks.4.subtasks]]
-    synopsis = 'Bump version and publish patch release'
+    synopsis = 'Bump version to 0.2.5 and publish patch release'
     llm      = 'none'
     done     = false
 
