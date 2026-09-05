@@ -15,7 +15,7 @@ version = '3.0.0'
     outcome = 'singular'
 
     [[issue.vision.output]]
-      purpose = 'An environment builder that backfills Windows-essential variables (PATHEXT and peers) with Windows defaults when the host omits them, applied at every nu spawn site: one-shot spawnNu (default, env-layered, cleanEnv) and the long-lived nu --mcp children.'
+      purpose = 'Environment builder backfilling Windows-essential variables (PATHEXT and peers) with Windows defaults when the host omits them, at every nu spawn site: one-shot spawnNu (default, env-layered, cleanEnv) and the long-lived nu --mcp children.'
       path    = 'src/env.ts'
 
     [[issue.vision.output]]
@@ -49,9 +49,9 @@ version = '3.0.0'
 
       [[issue.vision.landscape.internal]]
         type            = 'brownfield'
-        synopsis        = 'Nushell child env construction: spawnNu in src/nu.ts (default { ...process.env, ...env }, env-layered, bashEnv-merged, cleanEnv = env-only) and the long-lived nu --mcp children in src/client.ts (doc singleton, REPL buckets), spawned with no env option.'
+        synopsis        = 'Nushell child env construction: spawnNu in src/nu.ts (default { ...process.env, ...env }, env-layered, bashEnv-merged, cleanEnv = env-only) and the long-lived nu --mcp children in src/client.ts, spawned with no env option.'
         reference       = 'https://github.com/zaynram/nushell-mcp'
-        incompatibility = "Never drops PATHEXT but never backfills it: every spawn site passes the inherited env through verbatim, so when the MCP host launches the server without PATHEXT every nu child lacks it and extensionless resolution fails in nu's which and where.exe despite PATH being correct."
+        incompatibility = "Never drops PATHEXT but never backfills it: every spawn site passes the inherited env through verbatim, so a host that omits PATHEXT leaves every nu child without it and bare-name resolution fails in nu's which and where.exe despite a correct PATH."
 
       [[issue.vision.landscape.internal]]
         type     = 'greenfield'
