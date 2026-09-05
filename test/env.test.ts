@@ -24,13 +24,16 @@ const MISSING_ESSENTIALS = `let cols = ($env | columns | str upcase); [PATHEXT C
 
 /** Run `fn` with PATHEXT removed from this process, mirroring the SDK whitelist. */
 async function withoutPathext<T>(fn: () => Promise<T>): Promise<T> {
-  const saved = process.env.PATHEXT
-  delete process.env.PATHEXT
+  // Hosts vary the key's casing (PATHEXT, PathExt): strip whichever is set
+  // and restore it under its original name.
+  const key = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATHEXT')
+  const saved = key === undefined ? undefined : process.env[key]
+  if (key !== undefined) delete process.env[key]
   try {
     expect(process.env.PATHEXT).toBeUndefined()
     return await fn()
   } finally {
-    if (saved !== undefined) process.env.PATHEXT = saved
+    if (key !== undefined && saved !== undefined) process.env[key] = saved
   }
 }
 
@@ -164,8 +167,14 @@ describe.skipIf(!WINDOWS)('Windows essentials backfill (issue #2)', () => {
     expect(r.nuon).toBe('[]')
   })
 
-  test('REPL child resolves a bare external under the SDK whitelist env', async () => {
-    const output = await replProbeUnderSdkWhitelist()
-    expect(output).toContain('RESOLVED-OK')
-  })
+  // A child Bun over a network share can take well over Bun's 5s default to
+  // transpile, spawn nu --mcp, and hand-shake; the fixture has its own 20s guard.
+  test(
+    'REPL child resolves a bare external under the SDK whitelist env',
+    async () => {
+      const output = await replProbeUnderSdkWhitelist()
+      expect(output).toContain('RESOLVED-OK')
+    },
+    30_000
+  )
 })

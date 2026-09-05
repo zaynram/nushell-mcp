@@ -12,7 +12,8 @@ export type Env = Record<string, string | undefined>
 
 /** Windows env names are case-insensitive and hosts vary (`ComSpec`, `SystemRoot`). */
 function lookup(env: Env, name: string): string | undefined {
-  const key = Object.keys(env).find((k) => k.toUpperCase() === name)
+  const target = name.toUpperCase()
+  const key = Object.keys(env).find((k) => k.toUpperCase() === target)
   return key === undefined ? undefined : env[key]
 }
 
