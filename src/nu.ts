@@ -1,4 +1,5 @@
 import { active, addActive, removeActive } from '#active'
+import { withEssentials } from '#env'
 import { getNuMcpClient, type ListCommandEntry, parseListCommandsOutput } from '#client'
 import { getReplPool } from '#pool'
 import vars from '#vars'
@@ -86,7 +87,7 @@ const NU_COMMAND = [vars.NU_PATH, '--config', vars.CONFIG_PATH] as const
 
 /** Spawn `nu` with the given argv, collecting stdout/stderr under a timeout. */
 async function spawnNu(argv: string[], opts: RunOptions): Promise<RawResult> {
-  const env = opts.cleanEnv ? (opts.env ?? {}) : { ...process.env, ...opts.env }
+  const env = withEssentials(opts.cleanEnv ? (opts.env ?? {}) : { ...process.env, ...opts.env })
   const timeoutMs = opts.timeoutMs ?? vars.TIMEOUT_MS
   // Multiple search dirs pack into one flag value: nu splits on the record
   // separator (char record_sep, 0x1e) and prepends them to the default

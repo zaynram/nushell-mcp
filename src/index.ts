@@ -116,7 +116,11 @@ server.registerTool(
       cleanEnv: z
         .boolean()
         .optional()
-        .describe("Use only `env` instead of extending the host's environment."),
+        .describe(
+          "Use only `env` instead of extending the host's environment. " +
+            'On Windows, PATHEXT, COMSPEC, and TMP are still backfilled so ' +
+            'bare-name externals resolve.'
+        ),
       timeoutMs: z
         .number()
         .int()

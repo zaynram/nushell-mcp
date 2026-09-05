@@ -136,7 +136,7 @@ state survives. Rationale:
 Consequences, and how they are handled for `nu_exec`:
 
 - **Working directory** — pass `cwd` per call (defaults to the server's CWD).
-- **Environment** — pass `env` per call; it extends the server's environment unless `cleanEnv: true` replaces it. For dynamic shell setup (`source ~/.profile`, `nvm use`, etc.) pass a `bashEnv` snippet — the server runs it through bash, diffs exported vars against baseline, and merges the delta into nu's env for that one call.
+- **Environment** — pass `env` per call; it extends the server's environment unless `cleanEnv: true` replaces it. On Windows, `PATHEXT`, `COMSPEC`, and `TMP` are backfilled from the host or Windows defaults in every mode, so bare-name externals resolve even when the MCP host launched the server without them. For dynamic shell setup (`source ~/.profile`, `nvm use`, etc.) pass a `bashEnv` snippet — the server runs it through bash, diffs exported vars against baseline, and merges the delta into nu's env for that one call.
 - **Carrying data between calls** — pass `input` (see below) instead of relying on session state.
 - **Timeout / cancellation** — each call is killed after `timeoutMs`
   (default 30 s); `nu_exec_abort` terminates anything still running. A killed
