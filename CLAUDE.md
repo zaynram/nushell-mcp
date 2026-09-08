@@ -30,7 +30,7 @@ bunx tsc --noEmit
 
 ## Architecture
 
-Six source files, split by concern:
+Eight source files, split by concern:
 
 - **`src/index.ts`** —
   MCP wiring only.
@@ -80,6 +80,15 @@ Six source files, split by concern:
   The "extend the chain before awaiting prev" pattern is what guarantees FIFO —
   see the inline comment. Used by `NuMcpPool` per-bucket;
   could be used anywhere serialization-without-a-real-lock is needed.
+- **`src/vars.ts`** —
+  Server configuration resolved once at import:
+  `NU_PATH`, `CONFIG_PATH` (bundled `config/config.nu` or override), `TIMEOUT_MS`.
+- **`src/env.ts`** —
+  `withEssentials`, the Windows-essential env backfill every nu spawn site
+  routes through (`spawnNu` in all modes, and the `nu --mcp` children).
+  Adds `PATHEXT`, `COMSPEC`, and `TMP` when absent, from the host or Windows
+  defaults, matched case-insensitively. No-op off Windows.
+  Own file because `nu.ts` and `client.ts` both need it and must not import each other.
 
 The split exists so the test suite can exercise capabilities without booting MCP,
 and so the MCP layer stays a thin translation of tool schemas → `nu.ts` / pool calls.
@@ -103,6 +112,18 @@ merges them into nu's env for that call only.
 Preserve these contracts: `nu_exec` stays stateless;
 any new state-carrying feature must live in the REPL pool
 (or be opt-in via an explicit parameter on `nu_exec`).
+
+### Windows essentials backfill (`env.ts`)
+
+MCP hosts launch the server with a whitelist env (the MCP TypeScript SDK's
+win32 list omits `PATHEXT`, `COMSPEC`, and `TMP`), and without `PATHEXT`
+nu's `which` and bare external invocation cannot resolve extensionless names.
+Every nu spawn site therefore routes its env through `withEssentials`,
+which backfills those three from the host or Windows defaults when absent.
+`cleanEnv` still receives them; Bun itself injects `SYSTEMROOT`, `TEMP`,
+`PATH`, and `WINDIR` below this code on Windows. POSIX is untouched.
+Regression coverage lives in `test/env.test.ts`; the behavioral tests are
+Windows-only and skip elsewhere.
 
 ### REPL pool invariants (`pool.ts`)
 
@@ -177,9 +198,8 @@ and memoizes, but that version is not currently attached to every `nu_doc_*` res
 
 ## Conventions
 
-- 4-space indentation in `src/nu.ts`, `src/index.ts`, `src/client.ts`;
-  2-space indentation in `src/pool.ts` and `src/mutex.ts`.
-  No semicolons at statement ends, double-quoted strings.
+- 2-space indentation throughout `src/` and `test/`.
+  No semicolons at statement ends; single-quoted strings unless the text needs escaping.
   Match the existing style in the file you're editing.
 - TS is strict (`tsconfig.json`); `"types": ["node", "bun-types"]` —
   Bun-specific APIs (`Bun.spawn`, `Bun.file`, `Bun.write`, `Bun.which`)

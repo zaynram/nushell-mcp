@@ -179,6 +179,7 @@ export function parseListCommandsOutput(text: string): ListCommandEntry[] {
 // --- Singleton client lifecycle --------------------------------------------
 
 import { type ActiveRole, addActive, removeActive } from './active.js'
+import { withEssentials } from './env.js'
 
 /** Path to `nu`. Honors `NUSHELL_MCP_NU_PATH`; falls back to `nu` on PATH. */
 const NU_PATH: string = process.env.NUSHELL_MCP_NU_PATH ?? Bun.which('nu') ?? 'nu'
@@ -321,6 +322,7 @@ export class NuMcpChild {
 
   private async startup(): Promise<void> {
     const proc = Bun.spawn([NU_PATH, '--mcp', '--mcp-transport', 'stdio'], {
+      env: withEssentials({ ...process.env }),
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'ignore',
