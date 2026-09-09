@@ -623,6 +623,42 @@ describe('parseEvaluateEnvelope — pure helper', () => {
     expect(env.timestamp).toBe('2026-05-23T19:29:15.835595276+00:00')
   })
 
+  // nu quotes the cwd whenever the path needs it, and the quoting style is
+  // version-dependent: nu 0.114 wraps a backslash path (every Windows path)
+  // as a raw string, nu 0.115 leaves it bare, and both double-quote a path
+  // containing a space. The parser must return the path, not the literal.
+  test('unwraps a raw-string cwd (nu 0.114 on Windows)', () => {
+    const text = `{cwd:r#'C:\\Users\\ramda\\AppData\\Local\\Temp'#,history_index:1,timestamp:2026-01-01T00:00:00.000000000+00:00,output:[]}`
+    const env = parseEvaluateEnvelope(text)
+    expect(env.kind).toBe('ok')
+    if (env.kind !== 'ok') throw new Error('expected ok')
+    expect(env.cwd).toBe('C:\\Users\\ramda\\AppData\\Local\\Temp')
+  })
+
+  test('unwraps a double-quoted cwd and its escapes', () => {
+    const text = `{cwd:"C:\\\\Program Files\\\\nu",history_index:1,timestamp:2026-01-01T00:00:00.000000000+00:00,output:[]}`
+    const env = parseEvaluateEnvelope(text)
+    expect(env.kind).toBe('ok')
+    if (env.kind !== 'ok') throw new Error('expected ok')
+    expect(env.cwd).toBe('C:\\Program Files\\nu')
+  })
+
+  test('unwraps the double-quoted cwd nu emits for a path with a space', () => {
+    const text = `{cwd:"/tmp/nmcp sp dir",history_index:1,timestamp:2026-01-01T00:00:00.000000000+00:00,output:[]}`
+    const env = parseEvaluateEnvelope(text)
+    expect(env.kind).toBe('ok')
+    if (env.kind !== 'ok') throw new Error('expected ok')
+    expect(env.cwd).toBe('/tmp/nmcp sp dir')
+  })
+
+  test('leaves a bare cwd with a backslash untouched (nu 0.115)', () => {
+    const text = `{cwd:/tmp/nmcp-bs\\dir,history_index:0,timestamp:2026-01-01T00:00:00.000000000+00:00,output:[]}`
+    const env = parseEvaluateEnvelope(text)
+    expect(env.kind).toBe('ok')
+    if (env.kind !== 'ok') throw new Error('expected ok')
+    expect(env.cwd).toBe('/tmp/nmcp-bs\\dir')
+  })
+
   test('tolerates reordered fields', () => {
     const text = `{history_index:7, output:"x", cwd:/tmp, timestamp:2026-01-01T00:00:00.000000000+00:00}`
     const env = parseEvaluateEnvelope(text)
