@@ -881,9 +881,9 @@ describe('MCP server wiring', () => {
   }, 30_000)
 })
 
-describe('includeDirs (-I) module search', () => {
+describe('includeDirs (NU_LIB_DIRS) module search', () => {
   // Each test builds a throwaway module dir, so resolution can only succeed
-  // through --include-path — never via cwd or the generated script's own
+  // through NU_LIB_DIRS — never via cwd or the generated script's own
   // location (both point elsewhere).
   const moduleDirs: string[] = []
   async function makeModule(body: string): Promise<string> {
@@ -939,6 +939,21 @@ describe('includeDirs (-I) module search', () => {
     })
     expect(r.exitCode).toBe(0)
     expect(r.nuon).toBe('"first-dir"')
+  })
+
+  test('includeDirs entries outrank a NU_LIB_DIRS already in the env', async () => {
+    const mine = await makeModule(
+      "export def hello []: nothing -> string { 'from-include-dirs' }"
+    )
+    const host = await makeModule(
+      "export def hello []: nothing -> string { 'from-host-env' }"
+    )
+    const r = await runPipeline('use sampmod; sampmod hello', {
+      includeDirs: [mine],
+      env: { NU_LIB_DIRS: host },
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.nuon).toBe('"from-include-dirs"')
   })
 
   test('omitting includeDirs leaves resolution unchanged', async () => {

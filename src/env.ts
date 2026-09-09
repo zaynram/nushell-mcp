@@ -11,9 +11,13 @@
 export type Env = Record<string, string | undefined>
 
 /** Windows env names are case-insensitive and hosts vary (`ComSpec`, `SystemRoot`). */
-function lookup(env: Env, name: string): string | undefined {
+function findKey(env: Env, name: string): string | undefined {
   const target = name.toUpperCase()
-  const key = Object.keys(env).find((k) => k.toUpperCase() === target)
+  return Object.keys(env).find((k) => k.toUpperCase() === target)
+}
+
+function lookup(env: Env, name: string): string | undefined {
+  const key = findKey(env, name)
   return key === undefined ? undefined : env[key]
 }
 
@@ -43,4 +47,26 @@ export function withEssentials(
     if (value !== undefined) out[name] = value
   }
   return out
+}
+
+/**
+ * Return a copy of `env` with `dirs` prepended to `NU_LIB_DIRS`, joined with
+ * the separator nu splits that variable on: `;` on Windows, `:` elsewhere.
+ * Earlier entries win, and every entry outranks the host's own `NU_LIB_DIRS`
+ * and nu's defaults. The `--include-path` flag cannot carry these: nu splits
+ * it on `:` on every platform ("for backwards compatibility"), so `C:\\dir`
+ * fragments into `C` and a drive-relative `\\dir` that resolves only when the
+ * cwd shares the drive. Empty `dirs` returns `env` untouched.
+ */
+export function withIncludeDirs(
+  env: Env,
+  dirs: readonly string[],
+  platform: string = process.platform
+): Env {
+  if (dirs.length === 0) return env
+  const windows = platform === 'win32'
+  const key = (windows ? findKey(env, 'NU_LIB_DIRS') : undefined) ?? 'NU_LIB_DIRS'
+  const existing = env[key]
+  const joined = [...dirs, ...(existing ? [existing] : [])].join(windows ? ';' : ':')
+  return { ...env, [key]: joined }
 }
