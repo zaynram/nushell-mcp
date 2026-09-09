@@ -26,6 +26,9 @@ bun run build
 bun run check
 # run typecheck only
 bunx tsc --noEmit
+# verify on Windows from WSL: Windows Bun over the share (cmd.exe cannot cd to a UNC
+# path, but bun accepts one as --cwd; the WSL-side node_modules is pure JS)
+bun.exe --cwd \\wsl.localhost\<distro>\<path-to-repo> test [file] [-t "<pattern>"]
 ```
 
 ## Architecture
@@ -88,6 +91,8 @@ Eight source files, split by concern:
   routes through (`spawnNu` in all modes, and the `nu --mcp` children).
   Adds `PATHEXT`, `COMSPEC`, and `TMP` when absent, from the host or Windows
   defaults, matched case-insensitively. No-op off Windows.
+  Also `withIncludeDirs`: `includeDirs` ride `NU_LIB_DIRS` in the child env
+  (joined with `;` on Windows, `:` elsewhere), never `--include-path`.
   Own file because `nu.ts` and `client.ts` both need it and must not import each other.
 
 The split exists so the test suite can exercise capabilities without booting MCP,
@@ -125,6 +130,13 @@ which backfills those three from the host or Windows defaults when absent.
 Regression coverage lives in `test/env.test.ts`; the behavioral tests are
 Windows-only and skip elsewhere.
 
+`includeDirs` are carried the same way, by `withIncludeDirs`: prepended to
+`NU_LIB_DIRS` with the platform separator (`;` on Windows, `:` elsewhere),
+ahead of any host value and nu's defaults. nu splits `--include-path` on `:`
+on every platform, so a drive-letter directory passed that way fragments into
+`C` and a drive-relative `\dir` that resolves only when the cwd shares the
+drive; the env var is split on the platform separator and keeps the letter.
+
 ### REPL pool invariants (`pool.ts`)
 
 - **Serialization**:
@@ -145,6 +157,9 @@ Windows-only and skip elsewhere.
   only updated on successful `evaluate` responses via `parseEvaluateEnvelope`.
   Field-by-field merge — non-envelope tool responses
   (`list_commands`, `command_help`) leave the cache untouched.
+  `parseEvaluateEnvelope` strips the quoting nu applies to `cwd` (a raw
+  string on nu 0.114 for any backslash path, double quotes for a path with a
+  space), so the cache holds the path, not the literal.
 - **Side-channel probe**:
   `status(key)` invokes `evaluate` with `$env | columns` to read live env keys.
   That probe increments the bucket's `history_index`,
@@ -211,3 +226,9 @@ and memoizes, but that version is not currently attached to every `nu_doc_*` res
 - Every spawned subprocess (one-shot or long-lived) must be added to the
   `active` set with its `ActiveRole` tag so `killAll` / `abortExec` / `nu_exec_abort`
   can reach it.
+- Tests must pass under Windows Bun run from the WSL share (recipe above).
+  Single-quote any path interpolated into nu source (`cd '${dir}'`): nu reads
+  backslashes in double-quoted strings as escapes, so a Windows path fails to
+  parse. Long-lived stand-in processes come from nu or the running bun
+  (`process.execPath`), never `sleep`. Do not snapshot exact bash stderr:
+  WSL interop adds "Failed to translate" noise from a UNC cwd.

@@ -23,6 +23,18 @@ version = '3.0.0'
       path    = 'test/nu.activeSet.test.ts'
 
     [[issue.vision.output]]
+      purpose = 'withIncludeDirs: includeDirs prepended to NU_LIB_DIRS with the platform separator, replacing the --include-path flag that fragments drive-letter paths.'
+      path    = 'src/env.ts'
+
+    [[issue.vision.output]]
+      purpose = 'parseEvaluateEnvelope strips the raw, single-, or double-quoted form nu applies to the envelope cwd, so Windows paths and paths with spaces come back verbatim.'
+      path    = 'src/pool.ts'
+
+    [[issue.vision.output]]
+      purpose = 'Unit coverage for withIncludeDirs: platform separator, precedence over an existing NU_LIB_DIRS, case-insensitive key reuse on Windows.'
+      path    = 'test/env.test.ts'
+
+    [[issue.vision.output]]
       purpose = 'The Windows run recipe (Windows Bun over the WSL share with --cwd) and the nu double-quote backslash trap are documented for test authors.'
       path    = 'CLAUDE.md'
 
@@ -36,7 +48,7 @@ version = '3.0.0'
         'Linux results are unchanged.',
       ]
       constraints  = [
-        'Test-only changes, except the includeDirs leg, which may touch src/nu.ts if the workaround is chosen.',
+        'Test-only changes, except the includeDirs leg (src/nu.ts, src/env.ts) and the envelope-cwd unwrap in src/pool.ts that the cwd assertions exposed; both are separate commits.',
         'No new platform-conditional skips; the Windows-only gate in test/env.test.ts covers Windows-specific behavior and is not a precedent for hiding portability failures.',
         'The Windows suite keeps running from the WSL share: the UNC working directory is part of the reproduction, not something to route around.',
       ]
@@ -50,13 +62,15 @@ version = '3.0.0'
         'From a UNC cwd, bun test prepends \\wsl.localhost\...\node_modules\.bin to PATH, and WSL interop prints "wsl: Failed to translate ..." on stderr for every bash spawn, so an exact-stderr snapshot cannot match.',
         'nu splits --include-path on ":", ";", and the record separator by design (src/main.rs parse_path_list, "for backwards compatibility"): -I "/tmp/a:b" yields [/tmp/a, b] on nu 0.114 and 0.115, so C:\dir fragments into C and a drive-relative \dir.',
         'Consequently the script-file vehicle passes (the temp script lives on C:) while the -c vehicle fails from a UNC cwd; the same fragmentation hits real includeDirs use whenever cwd and the module directory are on different drives.',
+        'NU_LIB_DIRS env is split on the platform separator (";" on Windows): a C:\ dir set that way resolves from a UNC cwd on nu 0.114.2 (probed 2026-09-05). -I dirs are appended after env dirs, so the flag let a host NU_LIB_DIRS outrank includeDirs.',
+        "nu quotes the envelope cwd when the path needs it: 0.114 wraps a backslash path as r#'...'#, 0.115 leaves it bare, both double-quote a path with a space. parseEvaluateEnvelope kept the literal, so the cwd tests failed after the quoting fix.",
       ]
 
       [[issue.vision.landscape.internal]]
         type            = 'brownfield'
         synopsis        = 'The test suite (pool, smoke, activeSet) was written and run on Linux; five assertions encode POSIX assumptions: double-quoted path interpolation into nu, a sleep external, exact bash stderr, and a colon-free include path.'
         reference       = 'test/'
-        incompatibility = 'Five tests fail under Windows Bun while the code under test is largely fine; the includeDirs leg additionally exposes a real Windows defect in the shipped feature.'
+        incompatibility = 'Five tests fail under Windows Bun; two expose real Windows defects in src: -I fragmenting drive-letter includeDirs, and the envelope cwd returned with the quoting nu applies to backslash paths.'
 
       [[issue.vision.landscape.internal]]
         type            = 'brownfield'
@@ -111,82 +125,82 @@ version = '3.0.0'
 [tasks.1]
   id        = 'path-quoting'
   target    = 'Quote the temp paths that pool.test.ts and smoke.test.ts interpolate into nu cd commands so Windows backslashes survive; verify both tests on Windows Bun.'
-  completed = false
+  completed = 2026-09-08
 
   [[tasks.1.subtasks]]
     synopsis = 'Quote cd path in pool.test.ts'
     llm      = 'automation'
-    done     = false
+    done     = true
 
   [[tasks.1.subtasks]]
     synopsis = 'Quote cd path in smoke.test.ts'
     llm      = 'automation'
-    done     = false
+    done     = true
 
   [[tasks.1.subtasks]]
     synopsis = 'Verify both pass on Windows Bun'
     llm      = 'automation'
-    done     = false
+    done     = true
 
 [tasks.2]
   id        = 'portable-sleep'
   target    = 'Replace the sleep external in the abortExec active-set test with a long-lived process available on every platform.'
-  completed = false
+  completed = 2026-09-08
 
   [[tasks.2.subtasks]]
     synopsis = 'Replace sleep spawn with portable stand-in'
     llm      = 'automation'
-    done     = false
+    done     = true
 
   [[tasks.2.subtasks]]
     synopsis = 'Verify on Windows Bun and Linux'
     llm      = 'automation'
-    done     = false
+    done     = true
 
 [tasks.3]
   id        = 'bashenv-stderr-assert'
   target    = 'Make the bashEnv prelude-failure assertion match the exit code and prelude stderr while tolerating runner noise such as WSL path-translation warnings.'
-  completed = false
+  completed = 2026-09-08
 
   [[tasks.3.subtasks]]
     synopsis = 'Relax the inline snapshot to essentials'
     llm      = 'automation'
-    done     = false
+    done     = true
 
   [[tasks.3.subtasks]]
     synopsis = 'Verify under the WSL runner from a UNC cwd'
     llm      = 'automation'
-    done     = false
+    done     = true
 
 [tasks.4]
   id        = 'includedirs-colon-split'
   target    = 'Resolve the raw-vehicle includeDirs failure: nu splits --include-path on ":" by design, so drive-letter paths cannot ride the flag. Pick a workaround (NU_LIB_DIRS prepend) or an upstream change, implement it, and pass the test from a UNC cwd.'
-  completed = false
+  completed = 2026-09-08
 
   [[tasks.4.subtasks]]
     synopsis = 'Probe NU_LIB_DIRS env as -I substitute'
     llm      = 'automation'
-    done     = false
+    done     = true
 
   [[tasks.4.subtasks]]
     synopsis = 'Decide upstream fix vs nushell-mcp workaround'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
   [[tasks.4.subtasks]]
     synopsis = 'Implement chosen fix and verify on Windows Bun'
     llm      = 'augmentation'
-    done     = false
+    done     = true
 
 [tasks.5]
   id        = 'docs-recipe'
   target    = 'Document the Windows run recipe and the nu double-quote backslash trap for test authors in CLAUDE.md.'
-  completed = false
+  completed = 2026-09-08
 
   [[tasks.5.subtasks]]
     synopsis = 'Add Windows run recipe to CLAUDE.md'
     llm      = 'automation'
-    done     = false
+    done     = true
 
 [tasks.6]
   id        = 'review-merge'
