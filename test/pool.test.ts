@@ -372,7 +372,7 @@ describe('NuMcpPool — Cycle 5: ring buffer + envelope cache', () => {
     const p = new NuMcpPool({ maxRepls: 1 })
     try {
       p.spawn('env')
-      await p.call('env', 'evaluate', { input: `cd "${TMP_DIR}"` })
+      await p.call('env', 'evaluate', { input: `cd '${TMP_DIR}'` })
       const env = p.envelope('env')
       expect(env.kind).toBe('ok')
       if (env.kind !== 'ok') throw new Error('envelope not ok')
@@ -755,7 +755,7 @@ describe('NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
     const p = new NuMcpPool({ maxRepls: 1 })
     try {
       p.spawn('atomic-env')
-      await p.call('atomic-env', 'evaluate', { input: `cd "${TMP_DIR}"` })
+      await p.call('atomic-env', 'evaluate', { input: `cd '${TMP_DIR}'` })
       // The second call's envelope should reflect cwd=/tmp set above.
       const { response, envelope } = await p.call('atomic-env', 'evaluate', {
         input: '1 + 1',
@@ -777,7 +777,7 @@ describe('NuMcpPool — BUG 2 regression: call() returns atomic {response, envel
     try {
       p.spawn('pruned-env')
       // Establish a cwd in the session.
-      await p.call('pruned-env', 'evaluate', { input: `cd "${TMP_DIR}"` })
+      await p.call('pruned-env', 'evaluate', { input: `cd '${TMP_DIR}'` })
       // Start the call and capture the return atomically.
       const callPromise = p.call('pruned-env', 'evaluate', { input: '1' })
       // The result must be available regardless of what happens next.

@@ -139,7 +139,11 @@ describe('abortExec — Copilot 3295712499/3295712510: kills bash too', () => {
     // exercises the role filter that was previously dropping bash).
     const execPending = runRaw('sleep 30sec', { timeoutMs: 10_000 })
     await new Promise(r => setTimeout(r, 100))
-    const fakeBash = Bun.spawn(['sleep', '30'], { stdout: 'ignore', stderr: 'ignore' })
+    // The running bun stands in for a long-lived bash: `sleep` is not a Windows executable.
+    const fakeBash = Bun.spawn([process.execPath, '-e', 'setTimeout(() => {}, 30_000)'], {
+      stdout: 'ignore',
+      stderr: 'ignore',
+    })
     addActive(fakeBash, 'bash')
 
     // Park a repl child as a control — abortExec must not touch it.
