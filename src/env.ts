@@ -13,10 +13,6 @@ export type Env = Record<string, string | undefined>
 
 export const isWin = (platform: Platform = process.platform) => platform === 'win32'
 
-const compactList = <T>(items: (T | undefined | null)[]) => items.filter(Boolean) as T[]
-const envJoin = (items: string[], platform: Platform = process.platform) =>
-  items.join(isWin(platform) ? ';' : ':')
-
 /** Windows env names are case-insensitive and hosts vary (`ComSpec`, `SystemRoot`). */
 function findKey(
   env: Env,
@@ -30,16 +26,23 @@ function findKey(
   return Object.keys(env).find(compare)
 }
 
-function lookup(env: Env, name: string): string | undefined {
-  const key = findKey(env, name)
-  return key && env[key]
+function lookup<
+  T extends undefined | true = undefined,
+  O extends [string, string | undefined] | string | undefined = T extends undefined
+    ? string | undefined
+    : [string, string | undefined],
+>(env: Env, name: string, platform: Platform = process.platform, includeKey?: T): O {
+  const key = findKey(env, name, platform)
+  const val: string | undefined = key && env[key]
+  return (includeKey ? [key ?? name, val] : val) as O
 }
 
 /** The allowlist: name → Windows default when neither env nor host has it. */
 const WINDOWS_ESSENTIALS: Record<string, (host: Env) => string | undefined> = {
   PATHEXT: () => '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC',
-  COMSPEC: host => `${lookup(host, 'SYSTEMROOT') ?? 'C:\\Windows'}\\system32\\cmd.exe`,
-  TMP: host => lookup(host, 'TEMP'),
+  COMSPEC: host =>
+    `${lookup(host, 'SYSTEMROOT', 'win32') ?? 'C:\\Windows'}\\system32\\cmd.exe`,
+  TMP: host => lookup(host, 'TEMP', 'win32'),
 }
 
 /**
@@ -54,13 +57,12 @@ export function withEssentials(
   platform: Platform = process.platform
 ): Env {
   if (!isWin(platform)) return env
-  const out: Env = { ...env }
-  for (const [name, fallback] of Object.entries(WINDOWS_ESSENTIALS)) {
-    if (lookup(out, name) !== undefined) continue
-    const value = lookup(host, name) ?? fallback(host)
-    if (value !== undefined) out[name] = value
-  }
-  return out
+  const acc = { ...env }
+  return Object.entries(WINDOWS_ESSENTIALS)
+    .filter(([key]) => lookup(acc, key, platform) === undefined)
+    .map(([key, fallback]) => [key, lookup(host, key, platform) ?? fallback(host)])
+    .filter(([, val]) => val !== undefined)
+    .reduce((acc, [key, val]) => ({ ...acc, [key as string]: val }), acc)
 }
 
 /**
@@ -78,6 +80,7 @@ export function withIncludeDirs(
   platform: Platform = process.platform
 ): Env {
   if (dirs.length === 0) return env
-  const key = findKey(env, 'NU_LIB_DIRS', platform) ?? 'NU_LIB_DIRS'
-  return { ...env, [key]: envJoin(compactList([...dirs, env[key]]), platform) }
+  const [key, value] = lookup(env, 'NU_LIB_DIRS', platform, true)
+  const joined = (value ? [...dirs, value] : dirs).join(isWin(platform) ? ';' : ':')
+  return { ...env, [key]: joined }
 }
