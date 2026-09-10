@@ -58,11 +58,13 @@ export function withEssentials(
 ): Env {
   if (!isWin(platform)) return env
   const acc = { ...env }
-  return Object.entries(WINDOWS_ESSENTIALS)
-    .filter(([key]) => lookup(acc, key, platform) === undefined)
-    .map(([key, fallback]) => [key, lookup(host, key, platform) ?? fallback(host)])
-    .filter(([, val]) => val !== undefined)
-    .reduce((acc, [key, val]) => ({ ...acc, [key as string]: val }), acc)
+  for (const [key, fallback] of Object.entries(WINDOWS_ESSENTIALS)) {
+    if (lookup(acc, key, platform) !== undefined) continue
+    const val = lookup(host, key, platform) ?? fallback(host)
+    if (val === undefined) continue
+    acc[key] = val
+  }
+  return acc
 }
 
 /**
