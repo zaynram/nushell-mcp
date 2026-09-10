@@ -8,24 +8,38 @@
  * names, so every nu spawn site routes its env through `withEssentials`.
  */
 
+type Platform = typeof process.platform
 export type Env = Record<string, string | undefined>
 
+export const isWin = (platform: Platform = process.platform) => platform === 'win32'
+
+const compactList = <T>(items: (T | undefined | null)[]) => items.filter(Boolean) as T[]
+const envJoin = (items: string[], platform: Platform = process.platform) =>
+  items.join(isWin(platform) ? ';' : ':')
+
 /** Windows env names are case-insensitive and hosts vary (`ComSpec`, `SystemRoot`). */
-function findKey(env: Env, name: string): string | undefined {
-  const target = name.toUpperCase()
-  return Object.keys(env).find((k) => k.toUpperCase() === target)
+function findKey(
+  env: Env,
+  name: string,
+  platform: Platform = process.platform
+): string | undefined {
+  const upper = name.toUpperCase()
+  const compare = isWin(platform)
+    ? (s: string) => s.toUpperCase() == upper
+    : (s: string) => s == name
+  return Object.keys(env).find(compare)
 }
 
 function lookup(env: Env, name: string): string | undefined {
   const key = findKey(env, name)
-  return key === undefined ? undefined : env[key]
+  return key && env[key]
 }
 
 /** The allowlist: name → Windows default when neither env nor host has it. */
 const WINDOWS_ESSENTIALS: Record<string, (host: Env) => string | undefined> = {
   PATHEXT: () => '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC',
-  COMSPEC: (host) => `${lookup(host, 'SYSTEMROOT') ?? 'C:\\Windows'}\\system32\\cmd.exe`,
-  TMP: (host) => lookup(host, 'TEMP'),
+  COMSPEC: host => `${lookup(host, 'SYSTEMROOT') ?? 'C:\\Windows'}\\system32\\cmd.exe`,
+  TMP: host => lookup(host, 'TEMP'),
 }
 
 /**
@@ -37,9 +51,9 @@ const WINDOWS_ESSENTIALS: Record<string, (host: Env) => string | undefined> = {
 export function withEssentials(
   env: Env,
   host: Env = process.env,
-  platform: string = process.platform
+  platform: Platform = process.platform
 ): Env {
-  if (platform !== 'win32') return env
+  if (!isWin(platform)) return env
   const out: Env = { ...env }
   for (const [name, fallback] of Object.entries(WINDOWS_ESSENTIALS)) {
     if (lookup(out, name) !== undefined) continue
@@ -61,12 +75,9 @@ export function withEssentials(
 export function withIncludeDirs(
   env: Env,
   dirs: readonly string[],
-  platform: string = process.platform
+  platform: Platform = process.platform
 ): Env {
   if (dirs.length === 0) return env
-  const windows = platform === 'win32'
-  const key = (windows ? findKey(env, 'NU_LIB_DIRS') : undefined) ?? 'NU_LIB_DIRS'
-  const existing = env[key]
-  const joined = [...dirs, ...(existing ? [existing] : [])].join(windows ? ';' : ':')
-  return { ...env, [key]: joined }
+  const key = findKey(env, 'NU_LIB_DIRS', platform) ?? 'NU_LIB_DIRS'
+  return { ...env, [key]: envJoin(compactList([...dirs, env[key]]), platform) }
 }
