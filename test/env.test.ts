@@ -11,7 +11,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { withEssentials } from '#env'
+import { withEssentials, withIncludeDirs } from '#env'
 import { killAll, runPipeline } from '#nu'
 
 const WINDOWS = process.platform === 'win32'
@@ -148,6 +148,40 @@ describe('withEssentials', () => {
     const env = {}
     withEssentials(env, {}, 'win32')
     expect(env).toEqual({})
+  })
+})
+
+describe('withIncludeDirs', () => {
+  test('returns env untouched when there are no dirs', () => {
+    const env = { A: '1' }
+    expect(withIncludeDirs(env, [], 'win32')).toBe(env)
+  })
+
+  test('on Windows joins with ";" so drive letters survive', () => {
+    const out = withIncludeDirs({}, ['C:\\mods', 'D:\\more'], 'win32')
+    expect(out.NU_LIB_DIRS).toBe('C:\\mods;D:\\more')
+  })
+
+  test('off Windows joins with ":"', () => {
+    const out = withIncludeDirs({}, ['/a', '/b'], 'linux')
+    expect(out.NU_LIB_DIRS).toBe('/a:/b')
+  })
+
+  test('prepends to an existing NU_LIB_DIRS so the dirs take precedence', () => {
+    const out = withIncludeDirs({ NU_LIB_DIRS: '/host' }, ['/a'], 'linux')
+    expect(out.NU_LIB_DIRS).toBe('/a:/host')
+  })
+
+  test('on Windows extends a differently-cased existing key instead of shadowing it', () => {
+    const out = withIncludeDirs({ nu_lib_dirs: 'C:\\host' }, ['C:\\mods'], 'win32')
+    expect(out.nu_lib_dirs).toBe('C:\\mods;C:\\host')
+    expect(out.NU_LIB_DIRS).toBeUndefined()
+  })
+
+  test('does not mutate its input', () => {
+    const env = { NU_LIB_DIRS: '/host' }
+    withIncludeDirs(env, ['/a'], 'linux')
+    expect(env).toEqual({ NU_LIB_DIRS: '/host' })
   })
 })
 

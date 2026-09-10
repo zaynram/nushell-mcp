@@ -1,5 +1,5 @@
 import { active, addActive, removeActive } from '#active'
-import { withEssentials } from '#env'
+import { withEssentials, withIncludeDirs } from '#env'
 import { getNuMcpClient, type ListCommandEntry, parseListCommandsOutput } from '#client'
 import { getReplPool } from '#pool'
 import vars from '#vars'
@@ -37,9 +37,10 @@ export interface RunOptions {
   /** Use only `env` instead of extending the server's environment. */
   cleanEnv?: boolean
   /**
-   * Per-call module search directories, passed to `nu` via
-   * `--include-path`. Entries are prepended to the default `NU_LIB_DIRS`
-   * in the given order and take search precedence
+   * Per-call module search directories, prepended to `NU_LIB_DIRS` in the
+   * child's env in the given order. They take search precedence over any
+   * host `NU_LIB_DIRS` and nu's defaults. (Not `--include-path`: nu splits
+   * that flag on `:`, which fragments Windows drive-letter paths.)
    */
   includeDirs?: string[]
   /** Kill the process after this many ms. Defaults to `DEFAULT_TIMEOUT_MS`. */
@@ -87,15 +88,12 @@ const NU_COMMAND = [vars.NU_PATH, '--config', vars.CONFIG_PATH] as const
 
 /** Spawn `nu` with the given argv, collecting stdout/stderr under a timeout. */
 async function spawnNu(argv: string[], opts: RunOptions): Promise<RawResult> {
-  const env = withEssentials(opts.cleanEnv ? (opts.env ?? {}) : { ...process.env, ...opts.env })
+  const env = withIncludeDirs(
+    withEssentials(opts.cleanEnv ? (opts.env ?? {}) : { ...process.env, ...opts.env }),
+    opts.includeDirs ?? []
+  )
   const timeoutMs = opts.timeoutMs ?? vars.TIMEOUT_MS
-  // Multiple search dirs pack into one flag value: nu splits on the record
-  // separator (char record_sep, 0x1e) and prepends them to the default
-  // NU_LIB_DIRS in order.
-  const include = opts.includeDirs?.length
-    ? ['--include-path', opts.includeDirs.join('\x1e')]
-    : []
-  const proc = Bun.spawn(NU_COMMAND.concat(include, argv), {
+  const proc = Bun.spawn(NU_COMMAND.concat(argv), {
     cwd: opts.cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],

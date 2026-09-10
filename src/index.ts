@@ -99,10 +99,10 @@ server.registerTool(
         .array(z.string().min(1))
         .optional()
         .describe(
-          'Module search directories for this call, passed to nu ' +
-            'via `--include-path`. Entries are prepended to the ' +
-            'default NU_LIB_DIRS in the given order and take ' +
-            'search precedence. Lets `use` resolve ' +
+          'Module search directories for this call, prepended to ' +
+            'NU_LIB_DIRS in the child environment in the given order, ' +
+            "ahead of any host value and nu's defaults, so earlier " +
+            'entries win. Lets `use` resolve ' +
             'bare-name and ./-relative modules regardless of ' +
             "the generated script file's location."
         ),

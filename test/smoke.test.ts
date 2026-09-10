@@ -255,11 +255,12 @@ describe('audit regressions', () => {
 
   test('bashEnv surfaces stderr on prelude failure', async () => {
     if (!(await bashRuntimeAvailable())) return
+    // Exit code and the prelude's own stderr are the contract. The runner may
+    // add noise (WSL prints "Failed to translate" warnings from a UNC cwd), so
+    // an exact-stderr snapshot is not portable.
     await expect(
       loadBashEnv('echo problem >&2; exit 17')
-    ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"bashEnv prelude failed (exit 17): problem"`
-    )
+    ).rejects.toThrow(/^bashEnv prelude failed \(exit 17\): [\s\S]*\bproblem\b/)
   }, 20_000)
 
   test('input handles strings with quotes, newlines, and JSON escapes', async () => {
@@ -661,7 +662,7 @@ describe('MCP server wiring', () => {
 
       // --- nu_repl_status -----------------
       await call('nu_repl_spawn', { key: 'statbench' })
-      await call('nu_repl_write', { key: 'statbench', input: `cd "${TMP_DIR}"` })
+      await call('nu_repl_write', { key: 'statbench', input: `cd '${TMP_DIR}'` })
       const stat = await call('nu_repl_status', { key: 'statbench' })
       expect(stat.result.isError).toBeFalsy()
       expect(stat.result.structuredContent?.cwd).toBe(TMP_DIR)
@@ -880,9 +881,9 @@ describe('MCP server wiring', () => {
   }, 30_000)
 })
 
-describe('includeDirs (-I) module search', () => {
+describe('includeDirs (NU_LIB_DIRS) module search', () => {
   // Each test builds a throwaway module dir, so resolution can only succeed
-  // through --include-path — never via cwd or the generated script's own
+  // through NU_LIB_DIRS — never via cwd or the generated script's own
   // location (both point elsewhere).
   const moduleDirs: string[] = []
   async function makeModule(body: string): Promise<string> {
@@ -938,6 +939,21 @@ describe('includeDirs (-I) module search', () => {
     })
     expect(r.exitCode).toBe(0)
     expect(r.nuon).toBe('"first-dir"')
+  })
+
+  test('includeDirs entries outrank a NU_LIB_DIRS already in the env', async () => {
+    const mine = await makeModule(
+      "export def hello []: nothing -> string { 'from-include-dirs' }"
+    )
+    const host = await makeModule(
+      "export def hello []: nothing -> string { 'from-host-env' }"
+    )
+    const r = await runPipeline('use sampmod; sampmod hello', {
+      includeDirs: [mine],
+      env: { NU_LIB_DIRS: host },
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.nuon).toBe('"from-include-dirs"')
   })
 
   test('omitting includeDirs leaves resolution unchanged', async () => {

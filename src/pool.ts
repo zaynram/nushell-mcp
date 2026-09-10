@@ -76,6 +76,25 @@ export type BucketStatus =
  * The `timestamp` string is preserved verbatim — nanosecond precision
  * (`+00:00` with 9 fractional digits) does not round-trip through `Date`.
  */
+/**
+ * Pure: strip the quoting nu applies to a string field. nu wraps a cwd only
+ * when the path needs it, and the style is version-dependent: nu 0.114 emits
+ * a raw string (`r#'C:\\Users\\x'#`) for a backslash path, nu 0.115 leaves it
+ * bare, and both double-quote a path containing a space, escaping `\\` and
+ * `"` inside. Bare text is returned unchanged.
+ */
+function unquoteNuon(literal: string): string {
+  const raw = /^r(#+)'([\s\S]*)'\1$/.exec(literal)
+  if (raw) return raw[2] ?? ''
+  if (literal.length >= 2) {
+    if (literal.startsWith("'") && literal.endsWith("'")) return literal.slice(1, -1)
+    if (literal.startsWith('"') && literal.endsWith('"')) {
+      return literal.slice(1, -1).replace(/\\(["\\])/g, '$1')
+    }
+  }
+  return literal
+}
+
 export function parseEvaluateEnvelope(text: string): EvaluateEnvelope {
   // Match field preceded by start-of-string, `{`, or `,` (with optional
   // surrounding whitespace). Value terminates at the next `,` or `}`.
@@ -89,7 +108,7 @@ export function parseEvaluateEnvelope(text: string): EvaluateEnvelope {
 
   const cwd = parseNuonField('cwd')
   if (!cwd) return { kind: 'empty' }
-  const env: EvaluateEnvelope = { kind: 'ok', cwd }
+  const env: EvaluateEnvelope = { kind: 'ok', cwd: unquoteNuon(cwd) }
   const hist = parseNuonField('history_index')
   if (hist) {
     const n = Number.parseInt(hist, 10)
