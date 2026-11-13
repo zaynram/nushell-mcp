@@ -6,6 +6,7 @@ import {
   killAll,
   type PipelineResult,
   runPipeline,
+  runRaw,
   searchDocs,
 } from '#nu'
 import { type BucketStatus, getReplPool } from '#pool'
@@ -84,9 +85,11 @@ server.registerTool(
         .string()
         .optional()
         .describe(
-          'A value to pipe into the pipeline as `$in`, given as NUON ' +
-            'or JSON text. Use to transform data you already hold. ' +
-            'Honored in both structured and raw modes.'
+          'Data for the pipeline, given as NUON or JSON text. Use to ' +
+            'transform data you already hold. Structured mode parses it ' +
+            'and pipes the value in as `$in`. Raw mode passes the text ' +
+            'itself as `$in` (available in every statement), so parse ' +
+            'it there: `$in | from nuon | ...`.'
         ),
       cwd: z
         .string()
@@ -133,9 +136,13 @@ server.registerTool(
         .boolean()
         .optional()
         .describe(
-          'Capture the final value as NUON (default true). Set false ' +
-            'for raw `nu -c` execution when the wrapper would ' +
-            'interfere; `input` is still honored.'
+          'Structured (default true): the pipeline runs wrapped from a ' +
+            'temp script and its final value is captured as NUON plus ' +
+            'its `describe` type; relative `use` resolves against the ' +
+            "script's temp directory, so use `includeDirs`. Raw (false): " +
+            'plain `nu -c`, unwrapped, relative `use` resolves against `cwd`, ' +
+            'no NUON capture (`nuon` and `resultType` are null). Both ' +
+            'modes honor `input` and `bashEnv`, and neither keeps state.'
         ),
       bashEnv: z
         .string()
@@ -193,16 +200,11 @@ server.registerTool(
   }) => {
     const effectiveTimeout = timeoutMs ?? vars.TIMEOUT_MS
     try {
-      const result: PipelineResult = await runPipeline(pipeline, {
-        input,
-        cwd,
-        includeDirs,
-        env,
-        cleanEnv,
-        timeoutMs,
-        bashEnv,
-        noCapture: structured === false,
-      })
+      const options = { input, cwd, includeDirs, env, cleanEnv, timeoutMs, bashEnv }
+      const result: PipelineResult =
+        structured === false
+          ? { ...(await runRaw(pipeline, options)), nuon: null, resultType: null }
+          : await runPipeline(pipeline, options)
       return {
         content: [{ type: 'text', text: renderExec(result, effectiveTimeout) }],
         structuredContent: {
