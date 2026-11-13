@@ -1,5 +1,6 @@
 import {
   _resetBashRunnerProbe,
+  assertFitsCommandLine,
   getCommandDoc,
   getNuVersion,
   killAll,
@@ -7,6 +8,7 @@ import {
   runPipeline,
   runRaw,
   searchDocs,
+  WINDOWS_COMMAND_LINE_MAX,
 } from '#nu'
 /**
  * Smoke tests for nushell-mcp.
@@ -21,7 +23,7 @@ import {
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 // Use the OS temp dir instead of a hardcoded "/tmp" so the cwd / status
 // portability assertions stay valid across Linux, macOS, and Windows
@@ -154,9 +156,10 @@ describe('capability (b): execution environment', () => {
 
   // Regression: prior to the input-in-raw-mode fix, `input` was destructured
   // off the tool call but silently dropped when `structured: false`, so the
-  // pipeline saw no `$in` and errored "pipeline empty".
-  test('runRaw threads `input` into the pipeline as $in', async () => {
-    const r = await runRaw('where a > 1 | length', {
+  // pipeline saw no `$in` and errored "pipeline empty". Raw mode now hands
+  // the input text to `nu --stdin`, so the code parses `$in` itself.
+  test('runRaw threads `input` into the pipeline as $in text', async () => {
+    const r = await runRaw('$in | from nuon | where a > 1 | length', {
       input: '[{"a": 1}, {"a": 2}, {"a": 3}]',
     })
     expect(r.exitCode).toBe(0)
@@ -193,16 +196,16 @@ describe('bashEnv bridge', () => {
 
 // Tests targeting the issues surfaced during the audit pass.
 describe('audit regressions', () => {
-  test('noCapture preserves bashEnv', async () => {
+  // Raw mode used to keep bashEnv only by routing through runPipeline; the
+  // bridge is now shared, so runRaw layers it directly.
+  test('runRaw preserves bashEnv', async () => {
     if (!(await bashRuntimeAvailable())) return
-    const r = await runPipeline('print $env.NC_FROM_BASH', {
-      bashEnv: 'export NC_FROM_BASH=nocapture-ok',
-      noCapture: true,
+    const r = await runRaw('print $env.NC_FROM_BASH', {
+      bashEnv: 'export NC_FROM_BASH=raw-bridge-ok',
     })
     expect(r.exitCode).toBe(0)
-    expect(r.stdout).toContain('nocapture-ok')
-    expect(r.nuon).toBeNull()
-    expect(r.resultType).toBeNull()
+    expect(r.stdout).toContain('raw-bridge-ok')
+    expect(r.bashRunner).toBeDefined()
   }, 20_000)
 
   // Was: `${script}\nenv` mixed user-script stdout into the env-var parse.
@@ -963,5 +966,201 @@ describe('includeDirs (NU_LIB_DIRS) module search', () => {
     const r = await runPipeline('use sampmod; sampmod hello', {})
     expect(r.exitCode).not.toBe(0)
     expect(r.stderr).toContain('Module not found')
+  })
+})
+
+describe('raw mode (runRaw) scope and module resolution', () => {
+  // Raw mode runs `nu --commands` with no `do { }` wrap: imports are visible
+  // to `scope` and relative `use` resolves against the call's cwd.
+  let moduleDir: string
+  const SAMPLE = "export def dbl []: int -> int { $in * 2 }"
+
+  afterAll(async () => {
+    if (moduleDir) await rm(moduleDir, { recursive: true, force: true })
+  })
+
+  async function sampleDir(): Promise<string> {
+    moduleDir ??= await mkdtemp(join(TMP_DIR, 'nushell-mcp-raw-'))
+    await Bun.write(join(moduleDir, 'sample.nu'), SAMPLE)
+    return moduleDir
+  }
+
+  test('file, inline, and std imports are visible to scope and invokable', async () => {
+    const cwd = await sampleDir()
+    const r = await runRaw(
+      [
+        'use ./sample.nu',
+        'module inline { export def hi [] { "hi" } }',
+        'use inline',
+        'use std/assert',
+        "let mods = scope modules | get name",
+        "let cmds = scope commands | get name",
+        "{ mods: (['sample' 'inline' 'assert'] | all {|m| $m in $mods }), " +
+          "cmds: (['sample dbl' 'inline hi'] | all {|c| $c in $cmds }), " +
+          "call: (21 | sample dbl) } | to nuon",
+      ].join('; '),
+      { cwd }
+    )
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout.trim()).toBe('{mods: true, cmds: true, call: 42}')
+  })
+
+  test('relative use resolves against cwd with and without input', async () => {
+    const cwd = await sampleDir()
+    const bare = await runRaw('use ./sample.nu; 21 | sample dbl', { cwd })
+    expect(bare.exitCode).toBe(0)
+    expect(bare.stdout.trim()).toBe('42')
+
+    const fed = await runRaw('use ./sample.nu; $in | from nuon | sample dbl', {
+      cwd,
+      input: '21',
+    })
+    expect(fed.exitCode).toBe(0)
+    expect(fed.stdout.trim()).toBe('42')
+  })
+
+  test('$in holds the input text in every top-level statement', async () => {
+    const r = await runRaw(
+      "let n = $in | from nuon | length; [$n ($in | describe)] | to nuon",
+      { input: '[1, 2, 3]' }
+    )
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout.trim()).toBe('[3, string]')
+  })
+
+  test('without input, $in is nothing', async () => {
+    const r = await runRaw('$in | describe')
+    expect(r.stdout.trim()).toBe('nothing')
+  })
+
+  test('input text survives quotes and apostrophes verbatim', async () => {
+    // stdin carries the text, so no nu string literal has to hold it.
+    const tricky = "it's \"quoted\"\nand\\slashed"
+    const r = await runRaw('$in | from nuon | $in.text == $in.want', {
+      input: JSON.stringify({ text: tricky, want: tricky }),
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout.trim()).toBe('true')
+  })
+
+  test('raw calls stay stateless', async () => {
+    const cwd = await sampleDir()
+    await runRaw('$env.RAW_LEAK = 1; cd ..', { cwd })
+    const r = await runRaw(
+      "{leak: ($env.RAW_LEAK? | default 'unset'), dir: ($env.PWD | path basename)} | to json --raw",
+      { cwd }
+    )
+    expect(JSON.parse(r.stdout)).toEqual({ leak: 'unset', dir: basename(cwd) })
+  })
+})
+
+/**
+ * Boot the MCP server over stdio and return a `call` helper that sends one
+ * `tools/call` and resolves with its result. Call `close` when done.
+ */
+async function startServer(): Promise<{
+  call: (name: string, args: object) => Promise<{
+    isError?: boolean
+    structuredContent: Record<string, unknown>
+  }>
+  close: () => void
+}> {
+  const proc = Bun.spawn(['bun', `${import.meta.dir}/../src/index.ts`], {
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'ignore',
+  })
+  const reader = proc.stdout.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const nextMessage = async (): Promise<Record<string, unknown>> => {
+    for (;;) {
+      const newline = buffer.indexOf('\n')
+      if (newline >= 0) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        if (line) return JSON.parse(line)
+        continue
+      }
+      const { value, done } = await reader.read()
+      if (done) throw new Error('server closed stdout early')
+      buffer += decoder.decode(value, { stream: true })
+    }
+  }
+  const request = async (id: number, method: string, params: object) => {
+    proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
+    await proc.stdin.flush()
+    for (;;) {
+      const msg = await nextMessage()
+      if (msg.id === id) return msg
+    }
+  }
+  await request(1, 'initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'smoke', version: '0' },
+  })
+  proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
+  let nextId = 2
+  return {
+    call: async (name, args) =>
+      ((await request(nextId++, 'tools/call', { name, arguments: args })) as {
+        result: { isError?: boolean; structuredContent: Record<string, unknown> }
+      }).result,
+    close: () => {
+      reader.cancel().catch(() => {})
+      proc.kill()
+    },
+  }
+}
+
+describe('nu_exec mode routing', () => {
+  // Pins the mode split at the tool layer: `structured: false` reaches
+  // runRaw (`nu --commands` in the call's cwd, so `use ./` resolves there and
+  // nothing is captured), while the default reaches runPipeline, whose temp
+  // script parses `use ./` against the temp directory instead.
+  test('structured: false resolves relative use against cwd; the default does not', async () => {
+    const cwd = await mkdtemp(join(TMP_DIR, 'nushell-mcp-route-'))
+    await Bun.write(join(cwd, 'sample.nu'), 'export def hi [] { "hi-from-cwd" }')
+    const pipeline = 'use ./sample.nu; sample hi'
+    const server = await startServer()
+    try {
+      const raw = await server.call('nu_exec', { pipeline, cwd, structured: false })
+      expect(raw.isError).toBeFalsy()
+      expect(String(raw.structuredContent.stdout)).toContain('hi-from-cwd')
+      expect(raw.structuredContent.nuon).toBeNull()
+      expect(raw.structuredContent.resultType).toBeNull()
+
+      const wrapped = await server.call('nu_exec', { pipeline, cwd })
+      expect(wrapped.isError).toBe(true)
+      expect(String(wrapped.structuredContent.stderr)).toContain('Module not found')
+    } finally {
+      server.close()
+      await rm(cwd, { recursive: true, force: true })
+    }
+  }, 20_000)
+})
+
+describe('Windows command-line guard', () => {
+  test('passes argv within the cap on win32', () => {
+    expect(() => assertFitsCommandLine(['nu', '--commands', '1 + 1'], 'win32')).not.toThrow()
+  })
+
+  test('rejects argv past the cap on win32 with a structured-mode hint', () => {
+    const code = 'x'.repeat(WINDOWS_COMMAND_LINE_MAX)
+    expect(() => assertFitsCommandLine(['nu', '--commands', code], 'win32')).toThrow(
+      /Windows caps at 32767 characters[\s\S]*structured mode/
+    )
+  })
+
+  test('counts quotes and backslashes as escaped', () => {
+    const half = Math.ceil(WINDOWS_COMMAND_LINE_MAX / 2)
+    expect(() => assertFitsCommandLine(['"'.repeat(half)], 'win32')).toThrow()
+    expect(() => assertFitsCommandLine(['a'.repeat(half)], 'win32')).not.toThrow()
+  })
+
+  test('is a no-op off Windows', () => {
+    const code = 'x'.repeat(WINDOWS_COMMAND_LINE_MAX * 2)
+    expect(() => assertFitsCommandLine(['nu', '--commands', code], 'linux')).not.toThrow()
   })
 })
